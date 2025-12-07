@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
-import type { PoseFrame, PoseLandmark } from '../types/swing';
+import type { PoseFrame } from '../types/swing';
 
 // MediaPipe Pose connections
 const POSE_CONNECTIONS: [number, number][] = [
