@@ -162,13 +162,6 @@ const ReviewPage = () => {
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    // Calculate skeleton player dimensions based on container
-    const getSkeletonDimensions = () => {
-        if (isMobile || viewMode !== 'both') {
-            return { width: 300, height: 400 };
-        }
-        return { width: 250, height: 333 };
-    };
 
     if (loading) {
         return (
@@ -189,8 +182,6 @@ const ReviewPage = () => {
         );
     }
 
-    const skeletonDims = getSkeletonDimensions();
-
     return (
         <div className="h-screen bg-slate-900 text-white flex flex-col overflow-hidden">
             {/* Header */}
@@ -204,29 +195,11 @@ const ReviewPage = () => {
                 </button>
             </header>
 
-            {/* View Mode Toggle (Mobile only) */}
-            {isMobile && (
-                <div className="flex justify-center gap-2 p-2 bg-slate-800/30 shrink-0">
-                    <button
-                        onClick={() => setViewMode('video')}
-                        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm ${viewMode === 'video' ? 'bg-emerald-500' : 'bg-slate-700'}`}
-                    >
-                        <Video className="w-4 h-4" /> Video
-                    </button>
-                    <button
-                        onClick={() => setViewMode('skeleton')}
-                        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm ${viewMode === 'skeleton' ? 'bg-emerald-500' : 'bg-slate-700'}`}
-                    >
-                        <Activity className="w-4 h-4" /> Skeleton
-                    </button>
-                </div>
-            )}
-
             {/* Player Area */}
             <div ref={containerRef} className="flex-1 min-h-0 flex items-center justify-center p-2 gap-2">
                 {/* Video */}
                 {(viewMode === 'video' || viewMode === 'both') && session.videoUrl && (
-                    <div className={`bg-black flex items-center justify-center ${viewMode === 'both' ? 'flex-1' : 'w-full'} h-full rounded-lg overflow-hidden`}>
+                    <div className={`bg-black flex items-center justify-center h-full rounded-lg overflow-hidden ${viewMode === 'both' ? 'w-1/2' : 'w-full'}`}>
                         <video
                             ref={videoRef}
                             src={session.videoUrl}
@@ -243,14 +216,14 @@ const ReviewPage = () => {
 
                 {/* Skeleton */}
                 {(viewMode === 'skeleton' || viewMode === 'both') && session.poseFrames && (
-                    <div className={`flex items-center justify-center ${viewMode === 'both' ? '' : 'w-full h-full'}`}>
+                    <div className={`flex items-center justify-center h-full overflow-hidden ${viewMode === 'both' ? 'w-1/2' : 'w-full'}`}>
                         <SkeletonPlayer
                             frames={session.poseFrames}
                             currentTime={currentTimeMs}
                             duration={duration * 1000}
                             isPlaying={isPlaying}
-                            width={skeletonDims.width}
-                            height={skeletonDims.height}
+                            width={viewMode === 'both' ? 280 : 300}
+                            height={viewMode === 'both' ? 350 : 380}
                             showTrajectory={true}
                         />
                     </div>
@@ -278,15 +251,44 @@ const ReviewPage = () => {
                     <span className="text-sm text-slate-400 font-mono w-12">{formatTime(duration)}</span>
                 </div>
 
-                {/* Buttons */}
-                <div className="flex items-center justify-center gap-6">
+                {/* Buttons Row */}
+                <div className="flex items-center justify-center gap-4">
                     <button onClick={handleRestart} className="p-3 hover:bg-slate-700 rounded-full transition-colors">
                         <RotateCcw className="w-6 h-6" />
                     </button>
                     <button onClick={handlePlayPause} className="p-4 bg-emerald-500 hover:bg-emerald-600 rounded-full transition-colors">
                         {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8" />}
                     </button>
-                    <div className="w-12" />
+
+                    {/* View Mode Buttons */}
+                    <div className="flex items-center gap-1 ml-2">
+                        <button
+                            onClick={() => setViewMode('video')}
+                            className={`p-2 rounded-lg transition-colors ${viewMode === 'video' ? 'bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'}`}
+                            title="Video only"
+                        >
+                            <Video className="w-5 h-5" />
+                        </button>
+                        {!isMobile && (
+                            <button
+                                onClick={() => setViewMode('both')}
+                                className={`p-2 rounded-lg transition-colors ${viewMode === 'both' ? 'bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'}`}
+                                title="Both"
+                            >
+                                <div className="flex gap-0.5">
+                                    <Video className="w-3 h-5" />
+                                    <Activity className="w-3 h-5" />
+                                </div>
+                            </button>
+                        )}
+                        <button
+                            onClick={() => setViewMode('skeleton')}
+                            className={`p-2 rounded-lg transition-colors ${viewMode === 'skeleton' ? 'bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'}`}
+                            title="Skeleton only"
+                        >
+                            <Activity className="w-5 h-5" />
+                        </button>
+                    </div>
                 </div>
             </div>
 

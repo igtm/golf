@@ -77,6 +77,11 @@ const Camera = forwardRef<CameraRef, CameraProps>(({ onLandmarksUpdate, showDebu
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current);
             }
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
+            }
+            webcamRunningRef.current = false;
         };
     }, []);
 
