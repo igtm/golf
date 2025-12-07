@@ -13,7 +13,7 @@ db.version(1).stores({
 export const storage = {
     // Save a new session
     async saveSession(session: SwingSession): Promise<string> {
-        await db.sessions.add(session);
+        await db.sessions.put(session);
         return session.id;
     },
 

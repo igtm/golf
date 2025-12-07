@@ -5,8 +5,10 @@ import { storage } from '../utils/storage';
 import { analyzeSwing } from '../utils/metrics';
 import { SkeletonPlayer } from '../components/SkeletonPlayer';
 
+
 import type { SwingSession, SwingMetrics, PoseFrame, PoseLandmark } from '../types/swing';
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
+import { detectClub } from '../utils/clubDetection';
 
 type ViewMode = 'video' | 'skeleton' | 'both';
 
@@ -68,12 +70,17 @@ const ReviewPage = () => {
                     loadedSession.videoUrl = storage.createVideoUrl(loadedSession.videoBlob);
                 }
 
-                // Check if session needs analysis (imported video)
-                if (loadedSession.videoUrl && (!loadedSession.poseFrames || loadedSession.poseFrames.length === 0)) {
-                    console.log('Session needs analysis, starting...');
+                // Check if session needs analysis
+                // 1. Imported video (no poses)
+                // 2. Recorded video (has poses but no club data)
+                const needsPoseAnalysis = !loadedSession.poseFrames || loadedSession.poseFrames.length === 0;
+                const needsClubAnalysis = loadedSession.poseFrames && loadedSession.poseFrames.length > 0 && !loadedSession.poseFrames[0].club;
+
+                if (loadedSession.videoUrl && (needsPoseAnalysis || needsClubAnalysis)) {
+                    console.log('Session needs analysis:', { needsPoseAnalysis, needsClubAnalysis });
                     setSession(loadedSession);
                     setLoading(false);
-                    runPostAnalysis(loadedSession);
+                    runPostAnalysis(loadedSession, needsPoseAnalysis, needsClubAnalysis);
                 } else {
                     setSession(loadedSession);
 
@@ -133,25 +140,28 @@ const ReviewPage = () => {
         setIsPlaying(!isPlaying);
     };
 
-    const runPostAnalysis = async (currentSession: SwingSession) => {
+    const runPostAnalysis = async (currentSession: SwingSession, doPoseDetection: boolean, doClubDetection: boolean) => {
         if (!currentSession.videoUrl) return;
 
         try {
             setIsAnalyzing(true);
             setAnalysisProgress(0);
 
-            // 1. Load MediaPipe
-            const vision = await FilesetResolver.forVisionTasks(
-                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-            );
-            const landmarker = await PoseLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
-                    delegate: "GPU"
-                },
-                runningMode: "VIDEO",
-                numPoses: 1
-            });
+            // 1. Setup MediaPipe if needed
+            let landmarker: PoseLandmarker | null = null;
+            if (doPoseDetection) {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                landmarker = await PoseLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numPoses: 1
+                });
+            }
 
             // 2. Setup video for processing
             const video = document.createElement('video');
@@ -164,39 +174,53 @@ const ReviewPage = () => {
             });
 
             const duration = video.duration;
-            const fps = 30; // Target FPS for analysis
-            const frameInterval = 1 / fps;
-            const frames: PoseFrame[] = [];
+            const frames: PoseFrame[] = doPoseDetection ? [] : [...currentSession.poseFrames];
 
-            let currentTime = 0;
+            if (doPoseDetection) {
+                const fps = 30;
+                const frameInterval = 1 / fps;
+                let currentTime = 0;
 
-            while (currentTime < duration) {
-                // Seek
-                video.currentTime = currentTime;
-                await new Promise(r => { video.onseeked = () => r(true); });
+                while (currentTime < duration) {
+                    video.currentTime = currentTime;
+                    await new Promise(r => { video.onseeked = () => r(true); });
 
-                // Detect
-                const result = landmarker.detectForVideo(video, currentTime * 1000);
+                    if (landmarker) {
+                        const result = landmarker.detectForVideo(video, currentTime * 1000);
+                        const points = result.landmarks && result.landmarks.length > 0
+                            ? result.landmarks[0] as unknown as PoseLandmark[]
+                            : [];
 
-                // Store
-                if (result.landmarks && result.landmarks.length > 0) {
-                    frames.push({
-                        timestamp: currentTime * 1000,
-                        landmarks: result.landmarks[0] as unknown as PoseLandmark[]
-                    });
-                } else {
-                    // Empty frame if no detection
-                    frames.push({
-                        timestamp: currentTime * 1000,
-                        landmarks: []
-                    });
+                        const frame: PoseFrame = {
+                            timestamp: currentTime * 1000,
+                            landmarks: points
+                        };
+
+                        if (doClubDetection && points.length > 0) {
+                            const club = detectClub(video, points);
+                            if (club) frame.club = club;
+                        }
+
+                        frames.push(frame);
+                    }
+
+                    setAnalysisProgress(Math.round((currentTime / duration) * 100));
+                    currentTime += frameInterval;
                 }
+            } else if (doClubDetection) {
+                // Existing frames, fill club data
+                for (let i = 0; i < frames.length; i++) {
+                    const frame = frames[i];
+                    video.currentTime = frame.timestamp / 1000;
+                    await new Promise(r => { video.onseeked = () => r(true); });
 
-                // Update progress
-                setAnalysisProgress(Math.round((currentTime / duration) * 100));
+                    if (frame.landmarks.length > 0) {
+                        const club = detectClub(video, frame.landmarks);
+                        if (club) frame.club = club;
+                    }
 
-                // Next frame (skip loop if error)
-                currentTime += frameInterval;
+                    setAnalysisProgress(Math.round((i / frames.length) * 100));
+                }
             }
 
             // 3. Update Session
@@ -218,7 +242,7 @@ const ReviewPage = () => {
                 setPlaybackLoop(metrics.swingInterval);
             }
             setIsAnalyzing(false);
-            landmarker.close();
+            if (landmarker) landmarker.close();
 
         } catch (err) {
             console.error('Analysis failed:', err);

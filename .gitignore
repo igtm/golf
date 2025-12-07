@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# https://github.com/google-github-actions/run-gemini-cli/tree/main/examples/workflows/pr-review
+# gemini-cli settings
+.gemini/
+
+# GitHub App credentials
+gha-creds-*.json

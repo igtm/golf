@@ -7,9 +7,15 @@ export interface PoseLandmark {
     visibility?: number;
 }
 
+export interface ClubData {
+    angle: number; // Degrees, 0 is right (3 o'clock), clockwise
+    score: number; // Confidence 0-1
+}
+
 export interface PoseFrame {
-    timestamp: number;
+    timestamp: number; // ms
     landmarks: PoseLandmark[];
+    club?: ClubData;
 }
 
 export interface SwingMetrics {

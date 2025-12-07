@@ -93,7 +93,8 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
     }, [frames, currentTime]);
 
     // Calculate club position
-    const getClubPosition = (landmarks: PoseLandmark[]): { start: { x: number; y: number }; end: { x: number; y: number } } | null => {
+    const getClubPosition = (frame: PoseFrame): { start: { x: number; y: number }; end: { x: number; y: number } } | null => {
+        const landmarks = frame.landmarks;
         if (landmarks.length < 17) return null;
 
         const leftWrist = landmarks[15];
@@ -106,7 +107,22 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
         const startX = (leftWrist.x + rightWrist.x) / 2;
         const startY = (leftWrist.y + rightWrist.y) / 2;
 
-        // Extend club from wrist in direction of forearm
+        // Priority: Use detected club data if available
+        if (frame.club) {
+            const angleRad = (frame.club.angle * Math.PI) / 180;
+            const dx = Math.cos(angleRad);
+            const dy = Math.sin(angleRad);
+
+            return {
+                start: { x: startX, y: startY },
+                end: {
+                    x: startX + dx * CLUB_LENGTH,
+                    y: startY + dy * CLUB_LENGTH,
+                }
+            };
+        }
+
+        // Fallback: Extend club from wrist in direction of forearm
         const dx = leftWrist.x - leftElbow.x;
         const dy = leftWrist.y - leftElbow.y;
         const length = Math.sqrt(dx * dx + dy * dy);
@@ -173,7 +189,7 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
             let started = false;
 
             for (let i = 0; i <= Math.min(topOfSwingIndex, currentFrameIndex); i++) {
-                const clubPos = getClubPosition(frames[i].landmarks);
+                const clubPos = getClubPosition(frames[i]);
                 if (clubPos) {
                     const x = (1 - clubPos.end.x) * width; // Mirror
                     const y = clubPos.end.y * height;
@@ -195,7 +211,7 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
                 started = false;
 
                 for (let i = topOfSwingIndex; i <= currentFrameIndex; i++) {
-                    const clubPos = getClubPosition(frames[i].landmarks);
+                    const clubPos = getClubPosition(frames[i]);
                     if (clubPos) {
                         const x = (1 - clubPos.end.x) * width;
                         const y = clubPos.end.y * height;
@@ -232,7 +248,7 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
             }
 
             // Draw club
-            const clubPos = getClubPosition(currentLandmarks);
+            const clubPos = getClubPosition(frames[currentFrameIndex]);
             if (clubPos) {
                 ctx.strokeStyle = '#EF4444'; // red
                 ctx.lineWidth = 4;
