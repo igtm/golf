@@ -92,14 +92,19 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
         return closestIndex;
     }, [frames, currentTime]);
 
-    // Calculate club end position
-    const getClubEndPosition = (landmarks: PoseLandmark[]): { x: number; y: number } | null => {
-        if (landmarks.length < 16) return null;
+    // Calculate club position
+    const getClubPosition = (landmarks: PoseLandmark[]): { start: { x: number; y: number }; end: { x: number; y: number } } | null => {
+        if (landmarks.length < 17) return null;
 
         const leftWrist = landmarks[15];
+        const rightWrist = landmarks[16];
         const leftElbow = landmarks[13];
 
-        if (!leftWrist || !leftElbow) return null;
+        if (!leftWrist || !rightWrist || !leftElbow) return null;
+
+        // Hands midpoint (start of club)
+        const startX = (leftWrist.x + rightWrist.x) / 2;
+        const startY = (leftWrist.y + rightWrist.y) / 2;
 
         // Extend club from wrist in direction of forearm
         const dx = leftWrist.x - leftElbow.x;
@@ -109,8 +114,11 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
         if (length === 0) return null;
 
         return {
-            x: leftWrist.x + (dx / length) * CLUB_LENGTH,
-            y: leftWrist.y + (dy / length) * CLUB_LENGTH,
+            start: { x: startX, y: startY },
+            end: {
+                x: startX + (dx / length) * CLUB_LENGTH,
+                y: startY + (dy / length) * CLUB_LENGTH,
+            }
         };
     };
 
@@ -165,10 +173,10 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
             let started = false;
 
             for (let i = 0; i <= Math.min(topOfSwingIndex, currentFrameIndex); i++) {
-                const clubEnd = getClubEndPosition(frames[i].landmarks);
-                if (clubEnd) {
-                    const x = (1 - clubEnd.x) * width; // Mirror
-                    const y = clubEnd.y * height;
+                const clubPos = getClubPosition(frames[i].landmarks);
+                if (clubPos) {
+                    const x = (1 - clubPos.end.x) * width; // Mirror
+                    const y = clubPos.end.y * height;
                     if (!started) {
                         ctx.moveTo(x, y);
                         started = true;
@@ -187,10 +195,10 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
                 started = false;
 
                 for (let i = topOfSwingIndex; i <= currentFrameIndex; i++) {
-                    const clubEnd = getClubEndPosition(frames[i].landmarks);
-                    if (clubEnd) {
-                        const x = (1 - clubEnd.x) * width;
-                        const y = clubEnd.y * height;
+                    const clubPos = getClubPosition(frames[i].landmarks);
+                    if (clubPos) {
+                        const x = (1 - clubPos.end.x) * width;
+                        const y = clubPos.end.y * height;
                         if (!started) {
                             ctx.moveTo(x, y);
                             started = true;
@@ -224,20 +232,19 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
             }
 
             // Draw club
-            const leftWrist = currentLandmarks[15];
-            const clubEnd = getClubEndPosition(currentLandmarks);
-            if (leftWrist && clubEnd) {
+            const clubPos = getClubPosition(currentLandmarks);
+            if (clubPos) {
                 ctx.strokeStyle = '#EF4444'; // red
                 ctx.lineWidth = 4;
                 ctx.beginPath();
-                ctx.moveTo((1 - leftWrist.x) * width, leftWrist.y * height);
-                ctx.lineTo((1 - clubEnd.x) * width, clubEnd.y * height);
+                ctx.moveTo((1 - clubPos.start.x) * width, clubPos.start.y * height);
+                ctx.lineTo((1 - clubPos.end.x) * width, clubPos.end.y * height);
                 ctx.stroke();
 
                 // Club head
                 ctx.fillStyle = '#EF4444';
                 ctx.beginPath();
-                ctx.arc((1 - clubEnd.x) * width, clubEnd.y * height, 5, 0, Math.PI * 2);
+                ctx.arc((1 - clubPos.end.x) * width, clubPos.end.y * height, 5, 0, Math.PI * 2);
                 ctx.fill();
             }
 
