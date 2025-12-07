@@ -197,9 +197,14 @@ const ReviewPage = () => {
 
             {/* Player Area */}
             <div ref={containerRef} className="flex-1 min-h-0 flex items-center justify-center p-2 gap-2">
-                {/* Video */}
-                {(viewMode === 'video' || viewMode === 'both') && session.videoUrl && (
-                    <div className={`bg-black flex items-center justify-center h-full rounded-lg overflow-hidden ${viewMode === 'both' ? 'w-1/2' : 'w-full'}`}>
+                {/* Video - Always render to act as master clock, hide when not needed */}
+                {session.videoUrl && (
+                    <div
+                        className={`bg-black flex items-center justify-center h-full rounded-lg overflow-hidden transition-all duration-300 
+                            ${(viewMode === 'video' || viewMode === 'both') ? '' : 'hidden absolute opacity-0 pointer-events-none'}
+                            ${viewMode === 'both' ? 'w-1/2' : 'w-full'}
+                        `}
+                    >
                         <video
                             ref={videoRef}
                             src={session.videoUrl}
