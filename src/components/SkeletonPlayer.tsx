@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import type { PoseFrame, PoseLandmark } from '../types/swing';
 
 // MediaPipe Pose connections
@@ -32,7 +32,7 @@ interface SkeletonPlayerProps {
     swingPhases?: { name: string; timestamp: number }[];
 }
 
-export const SkeletonPlayer = ({
+export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>(({
     frames,
     currentTime,
     duration,
@@ -41,8 +41,10 @@ export const SkeletonPlayer = ({
     height = 400,
     showTrajectory = true,
     swingPhases,
-}: SkeletonPlayerProps) => {
+}, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    useImperativeHandle(ref, () => canvasRef.current!);
 
     // Find top of swing (phase transition point)
     const getTopOfSwingIndex = useCallback(() => {
@@ -270,6 +272,6 @@ export const SkeletonPlayer = ({
             className="rounded-lg"
         />
     );
-};
+});
 
 export default SkeletonPlayer;

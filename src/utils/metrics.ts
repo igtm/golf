@@ -91,21 +91,126 @@ export function calculateHeadMovement(
 /**
  * Analyze swing metrics from pose frames
  */
+/**
+ * Calculate velocity of a landmark (normalized units per frame)
+ */
+function calculateVelocity(
+    prev: PoseLandmark,
+    curr: PoseLandmark
+): number {
+    return Math.sqrt(
+        Math.pow(curr.x - prev.x, 2) +
+        Math.pow(curr.y - prev.y, 2)
+    );
+}
+
+/**
+ * Detect start and end of swing based on movement activity
+ * Returns timestamps in milliseconds
+ */
+export function detectSwingInterval(frames: PoseFrame[]): { start: number; end: number } {
+    if (!frames || frames.length < 10) {
+        return { start: 0, end: frames[frames.length - 1]?.timestamp || 0 };
+    }
+
+    const velocities: number[] = [];
+    // Calculate velocities for right wrist (index 16) - usually significant movement
+    // Smooth using moving average
+    for (let i = 1; i < frames.length; i++) {
+        const prev = frames[i - 1].landmarks[16]; // Right wrist
+        const curr = frames[i].landmarks[16];
+        if (prev && curr) {
+            velocities.push(calculateVelocity(prev, curr));
+        } else {
+            velocities.push(0);
+        }
+    }
+
+    // Find max velocity (likely impact/downswing)
+    let maxVel = 0;
+    let maxVelIndex = 0;
+    for (let i = 0; i < velocities.length; i++) {
+        if (velocities[i] > maxVel) {
+            maxVel = velocities[i];
+            maxVelIndex = i;
+        }
+    }
+
+    // Thresholds
+    const ACTIVITY_THRESHOLD = maxVel * 0.15; // 15% of max velocity
+
+    // Find start (move backwards from max)
+    let startIndex = 0;
+    for (let i = maxVelIndex; i >= 0; i--) {
+        if (velocities[i] < ACTIVITY_THRESHOLD) {
+            // Check if it stays low for a few frames
+            let isStable = true;
+            for (let j = 1; j <= 5 && i - j >= 0; j++) {
+                if (velocities[i - j] > ACTIVITY_THRESHOLD) {
+                    isStable = false;
+                    break;
+                }
+            }
+            if (isStable) {
+                startIndex = Math.max(0, i - 10); // Add buffer
+                break;
+            }
+        }
+    }
+
+    // Find end (move forwards from max)
+    let endIndex = frames.length - 1;
+    for (let i = maxVelIndex; i < velocities.length; i++) {
+        if (velocities[i] < ACTIVITY_THRESHOLD) {
+            // Check if it stays low
+            let isStable = true;
+            for (let j = 1; j <= 5 && i + j < velocities.length; j++) {
+                if (velocities[i + j] > ACTIVITY_THRESHOLD) {
+                    isStable = false;
+                    break;
+                }
+            }
+            if (isStable) {
+                endIndex = Math.min(frames.length - 1, i + 15); // Add buffer
+                break;
+            }
+        }
+    }
+
+    const start = frames[startIndex]?.timestamp || 0;
+    const end = frames[endIndex]?.timestamp || frames[frames.length - 1].timestamp;
+
+    console.log(`[DEBUG] Swing Interval: ${startIndex} (${start}ms) -> ${endIndex} (${end}ms)`);
+
+    return { start, end };
+}
+
 export function analyzeSwing(frames: PoseFrame[]): SwingMetrics | null {
     if (!frames || frames.length < 2) {
         console.log('[DEBUG] Not enough frames for analysis:', frames?.length);
         return null;
     }
 
-    // Get first frame (address position)
-    const addressFrame = frames[0];
+    // Detect swing interval first
+    const interval = detectSwingInterval(frames);
+
+    // Filter frames to only include the swing part
+    const swingFrames = frames.filter(f => f.timestamp >= interval.start && f.timestamp <= interval.end);
+
+    // Fallback if filtering resulted in too few frames (shouldn't happen with correct detection)
+    const analysisFrames = swingFrames.length > 5 ? swingFrames : frames;
+
+    console.log(`[DEBUG] Analyzing ${analysisFrames.length} frames (original: ${frames.length})`);
+
+    // Get first frame (address position) - relative to swing start
+    const addressFrame = analysisFrames[0];
 
     // Find frame with maximum arm extension (approximate impact)
     let maxArmDistance = 0;
     let impactFrameIndex = 0;
 
-    for (let i = 0; i < frames.length; i++) {
-        const landmarks = frames[i].landmarks;
+    for (let i = 0; i < analysisFrames.length; i++) {
+        const landmarks = analysisFrames[i].landmarks;
         if (landmarks.length < 25) continue;
 
         // Distance from shoulder to wrist (approximation)
@@ -125,7 +230,7 @@ export function analyzeSwing(frames: PoseFrame[]): SwingMetrics | null {
         }
     }
 
-    const impactFrame = frames[impactFrameIndex];
+    const impactFrame = analysisFrames[impactFrameIndex];
 
     // Calculate spine angles
     const addressSpineAngle = calculateSpineAngle(addressFrame.landmarks);
@@ -135,7 +240,7 @@ export function analyzeSwing(frames: PoseFrame[]): SwingMetrics | null {
     let maxLateralMovement = 0;
     let maxVerticalMovement = 0;
 
-    for (const frame of frames) {
+    for (const frame of analysisFrames) {
         const movement = calculateHeadMovement(addressFrame.landmarks, frame.landmarks);
         maxLateralMovement = Math.max(maxLateralMovement, movement.lateral);
         maxVerticalMovement = Math.max(maxVerticalMovement, movement.vertical);
@@ -154,6 +259,7 @@ export function analyzeSwing(frames: PoseFrame[]): SwingMetrics | null {
             lateral: Math.round(maxLateralMovement * pixelToCm * 10) / 10,
             vertical: Math.round(maxVerticalMovement * pixelToCm * 10) / 10,
         },
+        swingInterval: interval
     };
 
     console.log('[DEBUG] Swing analysis complete:', metrics);

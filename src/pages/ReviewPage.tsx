@@ -1,10 +1,12 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Pause, Trash2, RotateCcw, Video, Activity } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Trash2, RotateCcw, Video, Activity, Download, Film } from 'lucide-react';
 import { storage } from '../utils/storage';
 import { analyzeSwing } from '../utils/metrics';
 import { SkeletonPlayer } from '../components/SkeletonPlayer';
-import type { SwingSession, SwingMetrics } from '../types/swing';
+
+import type { SwingSession, SwingMetrics, PoseFrame, PoseLandmark } from '../types/swing';
+import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 type ViewMode = 'video' | 'skeleton' | 'both';
 
@@ -14,6 +16,7 @@ const ReviewPage = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const animationRef = useRef<number | null>(null);
+    const skeletonCanvasRef = useRef<HTMLCanvasElement>(null);
 
     const [session, setSession] = useState<SwingSession | null>(null);
     const [metrics, setMetrics] = useState<SwingMetrics | null>(null);
@@ -25,6 +28,16 @@ const ReviewPage = () => {
     const [duration, setDuration] = useState(0);
     const [viewMode, setViewMode] = useState<ViewMode>('both');
     const [isMobile, setIsMobile] = useState(false);
+
+    // Playback loop range
+    const [playbackLoop, setPlaybackLoop] = useState<{ start: number; end: number } | null>(null);
+    const [isLooping, setIsLooping] = useState(true);
+    const [isExporting, setIsExporting] = useState(false);
+    const [exportProgress, setExportProgress] = useState(0);
+
+    // Analysis state
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [analysisProgress, setAnalysisProgress] = useState(0);
 
     // Detect mobile
     useEffect(() => {
@@ -55,14 +68,32 @@ const ReviewPage = () => {
                     loadedSession.videoUrl = storage.createVideoUrl(loadedSession.videoBlob);
                 }
 
-                setSession(loadedSession);
+                // Check if session needs analysis (imported video)
+                if (loadedSession.videoUrl && (!loadedSession.poseFrames || loadedSession.poseFrames.length === 0)) {
+                    console.log('Session needs analysis, starting...');
+                    setSession(loadedSession);
+                    setLoading(false);
+                    runPostAnalysis(loadedSession);
+                } else {
+                    setSession(loadedSession);
 
-                if (loadedSession.poseFrames && loadedSession.poseFrames.length > 0) {
-                    const calculatedMetrics = analyzeSwing(loadedSession.poseFrames);
-                    setMetrics(calculatedMetrics);
+                    if (loadedSession.poseFrames && loadedSession.poseFrames.length > 0) {
+                        const calculatedMetrics = analyzeSwing(loadedSession.poseFrames);
+                        setMetrics(calculatedMetrics);
+
+                        // Use swing interval from metrics
+                        if (calculatedMetrics?.swingInterval && calculatedMetrics.swingInterval.end > calculatedMetrics.swingInterval.start) {
+                            const { start, end } = calculatedMetrics.swingInterval;
+                            setPlaybackLoop({ start: start / 1000, end: end / 1000 });
+                            // Start at beginning of swing
+                            setCurrentTime(start / 1000);
+                            if (videoRef.current) {
+                                videoRef.current.currentTime = start / 1000;
+                            }
+                        }
+                    }
+                    setLoading(false);
                 }
-
-                setLoading(false);
             } catch (err) {
                 console.error('Failed to load session:', err);
                 setError('Failed to load session');
@@ -102,10 +133,116 @@ const ReviewPage = () => {
         setIsPlaying(!isPlaying);
     };
 
+    const runPostAnalysis = async (currentSession: SwingSession) => {
+        if (!currentSession.videoUrl) return;
+
+        try {
+            setIsAnalyzing(true);
+            setAnalysisProgress(0);
+
+            // 1. Load MediaPipe
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            const landmarker = await PoseLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numPoses: 1
+            });
+
+            // 2. Setup video for processing
+            const video = document.createElement('video');
+            video.src = currentSession.videoUrl;
+            video.muted = true;
+            video.playsInline = true;
+
+            await new Promise((resolve) => {
+                video.onloadedmetadata = () => resolve(true);
+            });
+
+            const duration = video.duration;
+            const fps = 30; // Target FPS for analysis
+            const frameInterval = 1 / fps;
+            const frames: PoseFrame[] = [];
+
+            let currentTime = 0;
+
+            while (currentTime < duration) {
+                // Seek
+                video.currentTime = currentTime;
+                await new Promise(r => { video.onseeked = () => r(true); });
+
+                // Detect
+                const result = landmarker.detectForVideo(video, currentTime * 1000);
+
+                // Store
+                if (result.landmarks && result.landmarks.length > 0) {
+                    frames.push({
+                        timestamp: currentTime * 1000,
+                        landmarks: result.landmarks[0] as unknown as PoseLandmark[]
+                    });
+                } else {
+                    // Empty frame if no detection
+                    frames.push({
+                        timestamp: currentTime * 1000,
+                        landmarks: []
+                    });
+                }
+
+                // Update progress
+                setAnalysisProgress(Math.round((currentTime / duration) * 100));
+
+                // Next frame (skip loop if error)
+                currentTime += frameInterval;
+            }
+
+            // 3. Update Session
+            const metrics = analyzeSwing(frames);
+
+            const updatedSession: SwingSession = {
+                ...currentSession,
+                duration: duration,
+                poseFrames: frames,
+                metrics: metrics || undefined
+            };
+
+            await storage.saveSession(updatedSession);
+
+            // 4. Reset state
+            setSession(updatedSession);
+            setMetrics(metrics);
+            if (metrics?.swingInterval) {
+                setPlaybackLoop(metrics.swingInterval);
+            }
+            setIsAnalyzing(false);
+            landmarker.close();
+
+        } catch (err) {
+            console.error('Analysis failed:', err);
+            setError('Failed to analyze video. Please try again.');
+            setIsAnalyzing(false);
+        }
+    };
+
     const handleTimeUpdate = () => {
         if (!videoRef.current) return;
-        setCurrentTime(videoRef.current.currentTime);
-        setCurrentTimeMs(videoRef.current.currentTime * 1000);
+
+        const time = videoRef.current.currentTime;
+
+        // Loop logic
+        if (isLooping && playbackLoop && isPlaying) {
+            if (time >= playbackLoop.end || time < playbackLoop.start) {
+                videoRef.current.currentTime = playbackLoop.start;
+                setCurrentTime(playbackLoop.start);
+                return;
+            }
+        }
+
+        setCurrentTime(time);
+        setCurrentTimeMs(time * 1000);
     };
 
     const handleLoadedMetadata = () => {
@@ -148,11 +285,107 @@ const ReviewPage = () => {
         }
     };
 
+    const handleDownloadVideo = () => {
+        if (!session?.videoUrl) return;
+        const a = document.createElement('a');
+        a.href = session.videoUrl;
+        a.download = `swing-${new Date(session.createdAt).toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    };
+
+    const handleExportSkeleton = async () => {
+        if (!videoRef.current || !skeletonCanvasRef.current || !session) return;
+
+        setIsExporting(true);
+        setIsPlaying(false);
+        const originalViewMode = viewMode;
+        const originalLooping = isLooping;
+        const originalCurrentTime = videoRef.current.currentTime;
+
+        // Force skeleton view to ensure canvas is rendering
+        setViewMode('skeleton');
+        setIsLooping(false);
+
+        // Wait for view update
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        try {
+            const canvas = skeletonCanvasRef.current;
+            const stream = canvas.captureStream(30); // 30 FPS
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+
+            const chunks: Blob[] = [];
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) chunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `skeleton-${new Date(session.createdAt).toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                // Restore state
+                setIsExporting(false);
+                setViewMode(originalViewMode);
+                setIsLooping(originalLooping);
+                if (videoRef.current) videoRef.current.currentTime = originalCurrentTime;
+            };
+
+            mediaRecorder.start();
+
+            // Start playback from beginning (or loop start if we want trimmed)
+            const start = (playbackLoop && originalLooping) ? playbackLoop.start : 0;
+            const end = (playbackLoop && originalLooping) ? playbackLoop.end : duration;
+
+            videoRef.current.currentTime = start;
+
+            await new Promise(resolve => setTimeout(resolve, 200)); // buffer
+
+            videoRef.current.play();
+
+            // Monitor playback
+            const checkEnd = setInterval(() => {
+                if (!videoRef.current) {
+                    clearInterval(checkEnd);
+                    mediaRecorder.stop();
+                    return;
+                }
+
+                const current = videoRef.current.currentTime;
+                const progress = ((current - start) / (end - start)) * 100;
+                setExportProgress(Math.min(99, Math.max(0, progress)));
+
+                if (current >= end || videoRef.current.ended) {
+                    videoRef.current.pause();
+                    clearInterval(checkEnd);
+                    mediaRecorder.stop();
+                }
+            }, 100);
+
+        } catch (err) {
+            console.error('Export failed:', err);
+            alert('Export failed. Browser might not support canvas recording.');
+            setIsExporting(false);
+            setViewMode(originalViewMode);
+            setIsLooping(originalLooping);
+        }
+    };
+
     const handleRestart = () => {
         if (!videoRef.current) return;
-        videoRef.current.currentTime = 0;
-        setCurrentTime(0);
-        setCurrentTimeMs(0);
+        const startTime = (isLooping && playbackLoop) ? playbackLoop.start : 0;
+        videoRef.current.currentTime = startTime;
+        setCurrentTime(startTime);
+        setCurrentTimeMs(startTime * 1000);
+        setIsPlaying(true);
     };
 
     const formatTime = (seconds: number) => {
@@ -223,6 +456,7 @@ const ReviewPage = () => {
                 {(viewMode === 'skeleton' || viewMode === 'both') && session.poseFrames && (
                     <div className={`flex items-center justify-center h-full overflow-hidden ${viewMode === 'both' ? 'w-1/2' : 'w-full'}`}>
                         <SkeletonPlayer
+                            ref={skeletonCanvasRef}
                             frames={session.poseFrames}
                             currentTime={currentTimeMs}
                             duration={duration * 1000}
@@ -234,6 +468,36 @@ const ReviewPage = () => {
                     </div>
                 )}
             </div>
+
+            {/* Analysis Overlay */}
+            {isAnalyzing && (
+                <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center text-white">
+                    <Activity className="w-12 h-12 text-blue-500 animate-spin mb-4" />
+                    <h3 className="text-xl font-bold mb-2">Analyzing Swing...</h3>
+                    <div className="w-64 h-2 bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                            className="h-full bg-blue-500 transition-all duration-200"
+                            style={{ width: `${analysisProgress}%` }}
+                        />
+                    </div>
+                    <p className="mt-4 text-slate-400 text-sm">Detecting pose landmarks</p>
+                </div>
+            )}
+
+            {/* Export Overlay */}
+            {isExporting && (
+                <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center text-white">
+                    <Activity className="w-12 h-12 text-emerald-500 animate-spin mb-4" />
+                    <h3 className="text-xl font-bold mb-2">Exporting Skeleton...</h3>
+                    <div className="w-64 h-2 bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                            className="h-full bg-emerald-500 transition-all duration-200"
+                            style={{ width: `${exportProgress}%` }}
+                        />
+                    </div>
+                    <p className="mt-4 text-slate-400 text-sm">Please do not close this window</p>
+                </div>
+            )}
 
             {/* Playback Controls */}
             <div className="p-4 bg-slate-800/90 shrink-0">
@@ -267,6 +531,16 @@ const ReviewPage = () => {
 
                     {/* View Mode Buttons */}
                     <div className="flex items-center gap-1 ml-2">
+                        {/* Loop Toggle */}
+                        {playbackLoop && (
+                            <button
+                                onClick={() => setIsLooping(!isLooping)}
+                                className={`px-3 py-1.5 mr-2 rounded-lg text-xs font-bold transition-colors ${isLooping ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400'}`}
+                            >
+                                {isLooping ? 'SWING' : 'FULL'}
+                            </button>
+                        )}
+
                         <button
                             onClick={() => setViewMode('video')}
                             className={`p-2 rounded-lg transition-colors ${viewMode === 'video' ? 'bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'}`}
@@ -339,6 +613,24 @@ const ReviewPage = () => {
                         </div>
                     </div>
                 )}
+
+                {/* Export Actions */}
+                <div className="flex gap-3 mt-4">
+                    <button
+                        onClick={handleDownloadVideo}
+                        className="flex-1 bg-slate-700 hover:bg-slate-600 p-3 rounded-lg flex flex-col items-center gap-1 transition-colors"
+                    >
+                        <Download className="w-5 h-5 text-blue-400" />
+                        <span className="text-xs">Save Video</span>
+                    </button>
+                    <button
+                        onClick={handleExportSkeleton}
+                        className="flex-1 bg-slate-700 hover:bg-slate-600 p-3 rounded-lg flex flex-col items-center gap-1 transition-colors"
+                    >
+                        <Film className="w-5 h-5 text-emerald-400" />
+                        <span className="text-xs">Save Skeleton</span>
+                    </button>
+                </div>
             </div>
         </div>
     );

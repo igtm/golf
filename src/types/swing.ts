@@ -28,6 +28,10 @@ export interface SwingMetrics {
         downswing: number; // ms
         ratio: number;
     };
+    swingInterval?: {
+        start: number; // ms
+        end: number; // ms
+    };
 }
 
 export interface SwingPhase {

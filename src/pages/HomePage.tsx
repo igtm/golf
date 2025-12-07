@@ -1,7 +1,44 @@
-import { Link } from 'react-router-dom';
-import { Video, History, Target } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Video, History, Target, Upload } from 'lucide-react';
+import { storage } from '../utils/storage';
 
 const HomePage = () => {
+    const navigate = useNavigate();
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [isImporting, setIsImporting] = useState(false);
+
+    const handleImportClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        try {
+            setIsImporting(true);
+            const sessionId = storage.generateId();
+
+            // Generate basic session
+            const newSession = {
+                id: sessionId,
+                createdAt: new Date(),
+                duration: 0, // Will be updated in ReviewPage
+                videoBlob: file,
+                poseFrames: [], // Empty, triggers analysis in ReviewPage
+                notes: 'Imported Video',
+                cameraAngle: 'side' as const // Default
+            };
+
+            await storage.saveSession(newSession);
+            navigate(`/review/${sessionId}`);
+        } catch (err) {
+            console.error('Failed to import video:', err);
+            alert('Failed to import video');
+            setIsImporting(false);
+        }
+    };
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-900 text-white">
             {/* Header */}
@@ -38,6 +75,36 @@ const HomePage = () => {
                         <History className="w-6 h-6" />
                         View History
                     </Link>
+
+                    <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-slate-700"></div>
+                        </div>
+                        <div className="relative flex justify-center text-sm">
+                            <span className="px-2 bg-slate-900 text-slate-500">OR</span>
+                        </div>
+                    </div>
+
+                    <button
+                        onClick={handleImportClick}
+                        disabled={isImporting}
+                        className="flex items-center justify-center gap-3 w-full py-4 px-6 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-2xl font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-emerald-400"
+                    >
+                        {isImporting ? (
+                            <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                            <Upload className="w-6 h-6" />
+                        )}
+                        Import Video
+                    </button>
+
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="video/*"
+                        className="hidden"
+                        onChange={handleFileSelect}
+                    />
                 </div>
 
                 {/* Stats Preview (placeholder) */}
