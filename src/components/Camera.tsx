@@ -8,6 +8,7 @@ const Camera = () => {
     const [webcamRunning, setWebcamRunning] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const lastVideoTimeRef = useRef<number>(-1);
 
     // Initialize MediaPipe Pose Landmarker
     useEffect(() => {
@@ -19,7 +20,7 @@ const Camera = () => {
                 );
                 const newLandmarker = await PoseLandmarker.createFromOptions(vision, {
                     baseOptions: {
-                        modelAssetPath: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/pose_landmarker_lite.task`,
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
                         delegate: "GPU"
                     },
                     runningMode: "VIDEO",
@@ -58,45 +59,52 @@ const Camera = () => {
         }
     };
 
+
     const predictWebcam = () => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
 
-        if (!video || !canvas || !landmarker) return;
-
-        if (webcamRunning === false) return;
+        if (!video || !canvas || !landmarker || !webcamRunning) {
+            return;
+        }
 
         const startTimeMs = performance.now();
 
-        if (video.videoWidth > 0 && video.videoHeight > 0) {
+        // Only resize canvas once when video dimensions are available
+        if (canvas.width !== video.videoWidth && video.videoWidth > 0) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
+        }
+
+        // Only detect if we have a new frame
+        if (lastVideoTimeRef.current !== video.currentTime && video.videoWidth > 0) {
+            lastVideoTimeRef.current = video.currentTime;
+
+            // detectForVideo returns results synchronously (not via callback)
+            const results = landmarker.detectForVideo(video, startTimeMs);
 
             const ctx = canvas.getContext("2d");
             if (ctx) {
-                const drawingUtils = new DrawingUtils(ctx);
+                ctx.save();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                let lastVideoTime = -1;
-                if (lastVideoTime !== video.currentTime) {
-                    lastVideoTime = video.currentTime;
-                    landmarker.detectForVideo(video, startTimeMs, (result) => {
-                        ctx.save();
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
-                        for (const landmark of result.landmarks) {
-                            drawingUtils.drawLandmarks(landmark, {
-                                radius: (data) => DrawingUtils.lerp(data.from!.z, -0.15, 0.1, 5, 1)
-                            });
-                            drawingUtils.drawConnectors(landmark, PoseLandmarker.POSE_CONNECTIONS);
-                        }
-                        ctx.restore();
-                    });
+                // Draw all detected poses
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const drawingUtils = new DrawingUtils(ctx);
+                    for (const landmarks of results.landmarks) {
+                        drawingUtils.drawLandmarks(landmarks, {
+                            radius: (data) => DrawingUtils.lerp(data.from!.z, -0.15, 0.1, 5, 1)
+                        });
+                        drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS);
+                    }
                 }
+
+                ctx.restore();
             }
         }
 
-        if (webcamRunning) {
-            window.requestAnimationFrame(predictWebcam);
-        }
+        // Continue animation loop
+        window.requestAnimationFrame(predictWebcam);
     };
 
     return (
