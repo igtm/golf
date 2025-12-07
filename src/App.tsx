@@ -1,16 +1,22 @@
-import Camera from './components/Camera';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import HomePage from './pages/HomePage';
+import RecordPage from './pages/RecordPage';
+import ReviewPage from './pages/ReviewPage';
+import HistoryPage from './pages/HistoryPage';
+
+const basename = import.meta.env.PROD ? '/golf' : '/';
 
 function App() {
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-      <div className="text-center mb-6">
-        <h1 className="text-4xl font-bold text-green-400 mb-2">Golf AI</h1>
-        <p className="text-gray-400">Solo Practice Assistant</p>
-      </div>
-
-      <Camera />
-    </div>
-  )
+    <BrowserRouter basename={basename}>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/record" element={<RecordPage />} />
+        <Route path="/review/:sessionId" element={<ReviewPage />} />
+        <Route path="/history" element={<HistoryPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
 
-export default App
+export default App;

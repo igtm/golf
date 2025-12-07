@@ -1,10 +1,23 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { PoseLandmarker, FilesetResolver, DrawingUtils } from '@mediapipe/tasks-vision';
+import type { PoseLandmark } from '../types/swing';
 
-const Camera = () => {
+export interface CameraRef {
+    getStream: () => MediaStream | null;
+    getCurrentLandmarks: () => PoseLandmark[];
+}
+
+interface CameraProps {
+    onLandmarksUpdate?: (landmarks: PoseLandmark[]) => void;
+    showDebug?: boolean;
+}
+
+const Camera = forwardRef<CameraRef, CameraProps>(({ onLandmarksUpdate, showDebug = true }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const landmarkerRef = useRef<PoseLandmarker | null>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const currentLandmarksRef = useRef<PoseLandmark[]>([]);
     const [landmarker, setLandmarker] = useState<PoseLandmarker | null>(null);
     const [webcamRunning, setWebcamRunning] = useState(false);
     const webcamRunningRef = useRef(false);
@@ -23,6 +36,12 @@ const Camera = () => {
     });
     const frameCountRef = useRef(0);
     const lastFpsTimeRef = useRef(performance.now());
+
+    // Expose methods to parent
+    useImperativeHandle(ref, () => ({
+        getStream: () => streamRef.current,
+        getCurrentLandmarks: () => currentLandmarksRef.current,
+    }));
 
     // Initialize MediaPipe Pose Landmarker
     useEffect(() => {
@@ -66,14 +85,11 @@ const Camera = () => {
         const canvas = canvasRef.current;
         const currentLandmarker = landmarkerRef.current;
 
-        // Check if we should continue
         if (!webcamRunningRef.current) {
-            console.log('[DEBUG] webcamRunning is false, stopping loop');
             return;
         }
 
         if (!video || !canvas || !currentLandmarker) {
-            console.log('[DEBUG] Missing refs:', { video: !!video, canvas: !!canvas, landmarker: !!currentLandmarker });
             animationFrameRef.current = window.requestAnimationFrame(predictWebcam);
             return;
         }
@@ -90,7 +106,6 @@ const Camera = () => {
 
         const startTimeMs = performance.now();
 
-        // Only resize canvas once when video dimensions are available
         if (video.videoWidth > 0 && video.videoHeight > 0) {
             if (canvas.width !== video.videoWidth) {
                 canvas.width = video.videoWidth;
@@ -98,7 +113,6 @@ const Camera = () => {
                 setDebugInfo(prev => ({ ...prev, videoSize: `${video.videoWidth}x${video.videoHeight}` }));
             }
 
-            // Only detect if we have a new frame
             if (lastVideoTimeRef.current !== video.currentTime) {
                 lastVideoTimeRef.current = video.currentTime;
                 setDebugInfo(prev => ({ ...prev, detecting: true }));
@@ -113,21 +127,32 @@ const Camera = () => {
                         lastError: landmarksCount === 0 ? 'No pose detected' : ''
                     }));
 
+                    // Store current landmarks and notify parent
+                    if (results.landmarks && results.landmarks.length > 0) {
+                        const landmarks: PoseLandmark[] = results.landmarks[0].map(l => ({
+                            x: l.x,
+                            y: l.y,
+                            z: l.z,
+                            visibility: l.visibility
+                        }));
+                        currentLandmarksRef.current = landmarks;
+                        onLandmarksUpdate?.(landmarks);
+                    } else {
+                        currentLandmarksRef.current = [];
+                    }
+
                     const ctx = canvas.getContext("2d");
                     if (ctx) {
                         ctx.save();
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                        // Draw all detected poses
                         if (results.landmarks && results.landmarks.length > 0) {
                             const drawingUtils = new DrawingUtils(ctx);
                             for (const landmarks of results.landmarks) {
-                                // Draw connectors first (lines)
                                 drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
                                     color: '#00FF00',
                                     lineWidth: 4
                                 });
-                                // Draw landmarks (points)
                                 drawingUtils.drawLandmarks(landmarks, {
                                     color: '#FF0000',
                                     fillColor: '#FF0000',
@@ -150,9 +175,8 @@ const Camera = () => {
             setDebugInfo(prev => ({ ...prev, videoSize: 'waiting...', detecting: false }));
         }
 
-        // Continue animation loop
         animationFrameRef.current = window.requestAnimationFrame(predictWebcam);
-    }, []);
+    }, [onLandmarksUpdate]);
 
     const enableCam = () => {
         if (!landmarker) {
@@ -166,6 +190,11 @@ const Camera = () => {
             setWebcamRunning(false);
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current);
+            }
+            // Stop stream tracks
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
             }
             return;
         }
@@ -184,6 +213,7 @@ const Camera = () => {
                 }
             }).then((stream) => {
                 console.log("[DEBUG] Got media stream");
+                streamRef.current = stream;
                 video.srcObject = stream;
                 video.onloadedmetadata = () => {
                     console.log("[DEBUG] Video metadata loaded, starting prediction loop");
@@ -200,9 +230,9 @@ const Camera = () => {
     };
 
     return (
-        <div className="relative w-full max-w-md mx-auto aspect-[9/16] bg-black rounded-lg overflow-hidden shadow-xl">
+        <div className="relative w-full h-full bg-black">
             {/* Debug overlay */}
-            {webcamRunning && (
+            {webcamRunning && showDebug && (
                 <div className="absolute top-2 left-2 right-2 bg-black/70 text-white text-xs p-2 rounded z-20 font-mono">
                     <div>FPS: {debugInfo.fps}</div>
                     <div>Video: {debugInfo.videoSize}</div>
@@ -244,16 +274,18 @@ const Camera = () => {
                 autoPlay
                 playsInline
                 muted
-                className="absolute inset-0 w-full h-full object-cover"
+                className="absolute inset-0 w-full h-full object-contain"
                 style={{ transform: 'scaleX(-1)' }}
             ></video>
             <canvas
                 ref={canvasRef}
-                className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
                 style={{ transform: 'scaleX(-1)' }}
             ></canvas>
         </div>
     );
-};
+});
+
+Camera.displayName = 'Camera';
 
 export default Camera;
