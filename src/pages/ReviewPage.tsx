@@ -1,16 +1,19 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Pause, Trash2, RotateCcw, Video, Activity, Download, Film } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Trash2, RotateCcw, Video, Activity, Download, Film, Volume2, VolumeX, Triangle } from 'lucide-react';
 import { storage } from '../utils/storage';
 import { analyzeSwing } from '../utils/metrics';
 import { SkeletonPlayer } from '../components/SkeletonPlayer';
+import { VZoneOverlay } from '../components/VZoneOverlay';
 
 
-import type { SwingSession, SwingMetrics, PoseFrame, PoseLandmark } from '../types/swing';
+import type { SwingSession, SwingMetrics, PoseFrame, PoseLandmark, ClubData } from '../types/swing';
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { detectClub } from '../utils/clubDetection';
 
 type ViewMode = 'video' | 'skeleton' | 'both';
+
+
 
 const ReviewPage = () => {
     const { sessionId } = useParams();
@@ -33,7 +36,7 @@ const ReviewPage = () => {
 
     // Playback loop range
     const [playbackLoop, setPlaybackLoop] = useState<{ start: number; end: number } | null>(null);
-    const [isLooping, setIsLooping] = useState(true);
+    const [isLooping, setIsLooping] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [exportProgress, setExportProgress] = useState(0);
 
@@ -48,6 +51,54 @@ const ReviewPage = () => {
         window.addEventListener('resize', checkMobile);
         return () => window.removeEventListener('resize', checkMobile);
     }, []);
+
+    // Volume state and handlers
+    const [volume, setVolume] = useState(1);
+    const [isMuted, setIsMuted] = useState(false);
+
+    const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newVolume = parseFloat(e.target.value);
+        setVolume(newVolume);
+        if (newVolume > 0 && isMuted) {
+            setIsMuted(false);
+        }
+    };
+
+    const toggleMute = () => {
+        setIsMuted(!isMuted);
+    };
+
+    // Sync volume with video element
+    useEffect(() => {
+        if (videoRef.current) {
+            videoRef.current.volume = volume;
+            videoRef.current.muted = isMuted;
+        }
+    }, [volume, isMuted, session]); // Re-run when session loads (video mounts)
+
+    // Video Dimensions state for dynamic scaling
+    const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 });
+
+    const [showVZone, setShowVZone] = useState(false); // V-Zone toggle state
+
+    // Resize Observer to track video dimensions
+    useEffect(() => {
+        if (!videoRef.current) return;
+
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                // Use contentRect for precise rendered size
+                const { width, height } = entry.contentRect;
+                if (width > 0 && height > 0) {
+                     setVideoDimensions({ width, height });
+                }
+            }
+        });
+
+        observer.observe(videoRef.current);
+
+        return () => observer.disconnect();
+    }, [viewMode, session]); // Re-attach when view changes
 
     // Load session
     useEffect(() => {
@@ -80,7 +131,8 @@ const ReviewPage = () => {
                     console.log('Session needs analysis:', { needsPoseAnalysis, needsClubAnalysis });
                     setSession(loadedSession);
                     setLoading(false);
-                    runPostAnalysis(loadedSession, needsPoseAnalysis, needsClubAnalysis);
+                    // If we are doing pose detection, we should also do club detection
+                    runPostAnalysis(loadedSession, needsPoseAnalysis, needsClubAnalysis || needsPoseAnalysis);
                 } else {
                     setSession(loadedSession);
 
@@ -93,10 +145,10 @@ const ReviewPage = () => {
                             const { start, end } = calculatedMetrics.swingInterval;
                             setPlaybackLoop({ start: start / 1000, end: end / 1000 });
                             // Start at beginning of swing
-                            setCurrentTime(start / 1000);
-                            if (videoRef.current) {
-                                videoRef.current.currentTime = start / 1000;
-                            }
+                            // setCurrentTime(start / 1000);
+                            // if (videoRef.current) {
+                            //     videoRef.current.currentTime = start / 1000;
+                            // }
                         }
                     }
                     setLoading(false);
@@ -197,7 +249,7 @@ const ReviewPage = () => {
                         };
 
                         if (doClubDetection && points.length > 0) {
-                            const club = detectClub(video, points);
+                            const club = await detectClub(video, points);
                             if (club) frame.club = club;
                         }
 
@@ -215,7 +267,7 @@ const ReviewPage = () => {
                     await new Promise(r => { video.onseeked = () => r(true); });
 
                     if (frame.landmarks.length > 0) {
-                        const club = detectClub(video, frame.landmarks);
+                        const club = await detectClub(video, frame.landmarks);
                         if (club) frame.club = club;
                     }
 
@@ -457,7 +509,7 @@ const ReviewPage = () => {
                 {/* Video - Always render to act as master clock, hide when not needed */}
                 {session.videoUrl && (
                     <div
-                        className={`bg-black flex items-center justify-center h-full rounded-lg overflow-hidden transition-all duration-300 
+                        className={`bg-black flex items-center justify-center h-full rounded-lg overflow-hidden transition-all duration-300 relative
                             ${(viewMode === 'video' || viewMode === 'both') ? '' : 'hidden absolute opacity-0 pointer-events-none'}
                             ${viewMode === 'both' ? 'w-1/2' : 'w-full'}
                         `}
@@ -466,12 +518,19 @@ const ReviewPage = () => {
                             ref={videoRef}
                             src={session.videoUrl}
                             className="max-w-full max-h-full object-contain"
-                            style={{ transform: 'scaleX(-1)' }}
+                            // style={{ transform: 'scaleX(-1)' }} // Removed as requested
                             onTimeUpdate={handleTimeUpdate}
                             onLoadedMetadata={handleLoadedMetadata}
                             onLoadedData={handleLoadedData}
                             onEnded={() => setIsPlaying(false)}
                             playsInline
+                            muted={isMuted}
+                        />
+                        <VZoneOverlay
+                            frames={session.poseFrames || []}
+                            width={videoDimensions.width}
+                            height={videoDimensions.height}
+                            visible={showVZone}
                         />
                     </div>
                 )}
@@ -485,9 +544,8 @@ const ReviewPage = () => {
                             currentTime={currentTimeMs}
                             duration={duration * 1000}
                             isPlaying={isPlaying}
-                            width={viewMode === 'both' ? 280 : 300}
-                            height={viewMode === 'both' ? 350 : 380}
-                            showTrajectory={true}
+                            width={videoDimensions.width || (viewMode === 'both' ? 280 : 300)}
+                            height={videoDimensions.height || (viewMode === 'both' ? 350 : 380)}
                         />
                     </div>
                 )}
@@ -553,18 +611,37 @@ const ReviewPage = () => {
                         {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8" />}
                     </button>
 
+                    {/* Volume Control */}
+                    <div className="flex items-center gap-2 group">
+                        <button onClick={toggleMute} className="p-2 hover:bg-slate-700 rounded-full transition-colors">
+                            {isMuted || volume === 0 ? <VolumeX className="w-5 h-5 text-slate-400" /> : <Volume2 className="w-5 h-5 text-emerald-400" />}
+                        </button>
+                        <div className="w-0 group-hover:w-20 overflow-hidden transition-all duration-300">
+                             <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.1"
+                                value={isMuted ? 0 : volume}
+                                onChange={handleVolumeChange}
+                                className="w-full h-1 bg-slate-600 rounded-full appearance-none cursor-pointer
+                                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 
+                                    [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-emerald-500"
+                            />
+                        </div>
+                    </div>
+
+                    {/* V-Zone Data Toggle */}
+                    <button
+                        onClick={() => setShowVZone(!showVZone)}
+                        className={`p-2 rounded-lg transition-colors ml-4 ${showVZone ? 'bg-yellow-500/20 text-yellow-500' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+                        title="Toggle V-Zone"
+                    >
+                         <Triangle className="w-5 h-5" />
+                    </button>
+
                     {/* View Mode Buttons */}
                     <div className="flex items-center gap-1 ml-2">
-                        {/* Loop Toggle */}
-                        {playbackLoop && (
-                            <button
-                                onClick={() => setIsLooping(!isLooping)}
-                                className={`px-3 py-1.5 mr-2 rounded-lg text-xs font-bold transition-colors ${isLooping ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400'}`}
-                            >
-                                {isLooping ? 'SWING' : 'FULL'}
-                            </button>
-                        )}
-
                         <button
                             onClick={() => setViewMode('video')}
                             className={`p-2 rounded-lg transition-colors ${viewMode === 'video' ? 'bg-emerald-500' : 'bg-slate-700 hover:bg-slate-600'}`}

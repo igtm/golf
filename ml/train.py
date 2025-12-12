@@ -14,20 +14,20 @@ def train():
     
     print(f"Training using data config: {data_path}")
 
-    # Load model (Nano Segmentation)
-    model = YOLO('yolov8n-seg.pt')
+    # Load model (Small Segmentation - better accuracy than Nano)
+    model = YOLO('yolov8s-seg.pt')
 
     # Train
     results = model.train(
         data=data_path,
-        epochs=30, 
-        imgsz=320, # Minimal image size for stability
-        batch=1,   # Absolute minimum batch size
-        workers=0, 
-        plots=False, # Disable plotting (matplotlib can cause crashes in WSL)
+        epochs=100,      # Increased from 30 for better convergence
+        imgsz=640,       # Increased from 320 to capture fine details (shafts)
+        batch=16,        # Standard batch size for GPU training
+        workers=8,       # Enable workers for faster data loading
+        plots=True,      # Enable plotting to monitor training
         project=os.path.join(script_dir, 'runs/train'),
-        name='club_seg_v1',
-        device='cpu' 
+        name='club_seg_v2_high_acc',
+        # device='0'     # Uncomment to force specific GPU, otherwise auto
     )
 
     # Export to ONNX

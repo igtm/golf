@@ -10,6 +10,7 @@ export interface PoseLandmark {
 export interface ClubData {
     angle: number; // Degrees, 0 is right (3 o'clock), clockwise
     score: number; // Confidence 0-1
+    debugPoint?: { x: number; y: number }; // Normalized coordinates (0-1)
 }
 
 export interface PoseFrame {

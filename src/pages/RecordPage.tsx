@@ -285,7 +285,7 @@ const RecordPage = () => {
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
                             >
-                                <User className="w-4 h-4" /> 横から
+                                <User className="w-4 h-4" /> 後方 (Down the Line)
                             </button>
                             <button
                                 onClick={() => setCameraAngle('behind')}
@@ -294,7 +294,7 @@ const RecordPage = () => {
                                     : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                                     }`}
                             >
-                                <User className="w-4 h-4 rotate-180" /> 後ろから
+                                <User className="w-4 h-4" /> 正面 (Face On)
                             </button>
                         </div>
                     </div>

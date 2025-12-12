@@ -270,3 +270,75 @@ export function analyzeSwing(frames: PoseFrame[]): SwingMetrics | null {
     console.log('[DEBUG] Swing analysis complete:', metrics);
     return metrics;
 }
+
+// Visual Helpers
+
+const CLUB_LENGTH = 0.3; // Relative length
+
+export function getClubPosition(frame: PoseFrame): { start: { x: number; y: number }; end: { x: number; y: number } } | null {
+    const landmarks = frame.landmarks;
+    if (landmarks.length < 17) return null;
+
+    const leftWrist = landmarks[15];
+    const rightWrist = landmarks[16];
+    const leftElbow = landmarks[13];
+
+    if (!leftWrist || !rightWrist || !leftElbow) return null;
+
+    // Hands midpoint (start of club)
+    const startX = (leftWrist.x + rightWrist.x) / 2;
+    const startY = (leftWrist.y + rightWrist.y) / 2;
+
+    // Priority: Use debugPoint (exact detection) if available
+    if (frame.club?.debugPoint) {
+        return {
+            start: { x: startX, y: startY },
+            end: {
+                x: frame.club.debugPoint.x,
+                y: frame.club.debugPoint.y
+            }
+        };
+    }
+
+    // Fallback: Use angle + fixed length
+    if (frame.club) {
+        const angleRad = (frame.club.angle * Math.PI) / 180;
+        const dx = Math.cos(angleRad);
+        const dy = Math.sin(angleRad);
+
+        return {
+            start: { x: startX, y: startY },
+            end: {
+                x: startX + dx * CLUB_LENGTH,
+                y: startY + dy * CLUB_LENGTH,
+            }
+        };
+    }
+
+    return null;
+}
+
+export function calculateVZone(frames: PoseFrame[]): { neck: {x: number, y: number}, hands: {x: number, y: number}, clubHead: {x: number, y: number} } | null {
+    // 1. Find Address Frame (Use first valid frame with club data or landmarks)
+    const addressFrame = frames.find(f => f.landmarks.length > 20 && f.club);
+    if (!addressFrame || !addressFrame.club) return null;
+
+    const landmarks = addressFrame.landmarks;
+    const club = getClubPosition(addressFrame);
+    if (!club) return null;
+
+    // 2. Calculate Key Points
+    // Neck: Midpoint of shoulders (11 & 12)
+    const leftShoulder = landmarks[11];
+    const rightShoulder = landmarks[12];
+    const neck = {
+        x: (leftShoulder.x + rightShoulder.x) / 2,
+        y: (leftShoulder.y + rightShoulder.y) / 2
+    };
+
+    return {
+        neck,
+        hands: club.start,
+        clubHead: club.end
+    };
+}

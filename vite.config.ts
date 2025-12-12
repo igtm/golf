@@ -10,4 +10,7 @@ export default defineConfig(({ mode }) => ({
     react(),
     tailwindcss(),
   ],
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
 }))
