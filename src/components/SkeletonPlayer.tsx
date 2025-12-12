@@ -28,7 +28,6 @@ interface SkeletonPlayerProps {
     isPlaying: boolean;
     width?: number;
     height?: number;
-    showTrajectory?: boolean;
     swingPhases?: { name: string; timestamp: number }[];
 }
 
@@ -39,40 +38,10 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
     isPlaying: _isPlaying,
     width = 300,
     height = 400,
-    showTrajectory = true,
-    swingPhases,
 }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useImperativeHandle(ref, () => canvasRef.current!);
-
-    // Find top of swing (phase transition point)
-    const getTopOfSwingIndex = useCallback(() => {
-        if (!swingPhases) {
-            // Approximate: find where x velocity of left wrist changes direction
-            let maxWristHeight = 0;
-            let topIndex = Math.floor(frames.length / 2);
-
-            for (let i = 0; i < frames.length; i++) {
-                const landmarks = frames[i].landmarks;
-                if (landmarks.length > 15) {
-                    const leftWrist = landmarks[15];
-                    // Lower y = higher position (screen coords)
-                    if (leftWrist && (1 - leftWrist.y) > maxWristHeight) {
-                        maxWristHeight = 1 - leftWrist.y;
-                        topIndex = i;
-                    }
-                }
-            }
-            return topIndex;
-        }
-
-        const topPhase = swingPhases.find(p => p.name === 'top');
-        if (topPhase) {
-            return frames.findIndex(f => f.timestamp >= topPhase.timestamp) || Math.floor(frames.length / 2);
-        }
-        return Math.floor(frames.length / 2);
-    }, [frames, swingPhases]);
 
     // Get current frame index based on time
     const getCurrentFrameIndex = useCallback(() => {
@@ -107,7 +76,18 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
         const startX = (leftWrist.x + rightWrist.x) / 2;
         const startY = (leftWrist.y + rightWrist.y) / 2;
 
-        // Priority: Use detected club data if available
+        // Priority: Use debugPoint (exact detection) if available
+        if (frame.club?.debugPoint) {
+            return {
+                start: { x: startX, y: startY },
+                end: {
+                    x: frame.club.debugPoint.x,
+                    y: frame.club.debugPoint.y
+                }
+            };
+        }
+
+        // Fallback: Use angle + fixed length
         if (frame.club) {
             const angleRad = (frame.club.angle * Math.PI) / 180;
             const dx = Math.cos(angleRad);
@@ -122,20 +102,7 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
             };
         }
 
-        // Fallback: Extend club from wrist in direction of forearm
-        const dx = leftWrist.x - leftElbow.x;
-        const dy = leftWrist.y - leftElbow.y;
-        const length = Math.sqrt(dx * dx + dy * dy);
-
-        if (length === 0) return null;
-
-        return {
-            start: { x: startX, y: startY },
-            end: {
-                x: startX + (dx / length) * CLUB_LENGTH,
-                y: startY + (dy / length) * CLUB_LENGTH,
-            }
-        };
+        return null;
     };
 
     // Draw function
@@ -177,55 +144,8 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
         }
 
         const currentFrameIndex = getCurrentFrameIndex();
-        const topOfSwingIndex = getTopOfSwingIndex();
         const currentLandmarks = frames[currentFrameIndex]?.landmarks;
 
-        // Draw trajectory if enabled
-        if (showTrajectory) {
-            // Backswing trajectory (blue)
-            ctx.strokeStyle = '#3B82F6';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            let started = false;
-
-            for (let i = 0; i <= Math.min(topOfSwingIndex, currentFrameIndex); i++) {
-                const clubPos = getClubPosition(frames[i]);
-                if (clubPos) {
-                    const x = (1 - clubPos.end.x) * width; // Mirror
-                    const y = clubPos.end.y * height;
-                    if (!started) {
-                        ctx.moveTo(x, y);
-                        started = true;
-                    } else {
-                        ctx.lineTo(x, y);
-                    }
-                }
-            }
-            ctx.stroke();
-
-            // Downswing trajectory (orange)
-            if (currentFrameIndex > topOfSwingIndex) {
-                ctx.strokeStyle = '#F59E0B';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                started = false;
-
-                for (let i = topOfSwingIndex; i <= currentFrameIndex; i++) {
-                    const clubPos = getClubPosition(frames[i]);
-                    if (clubPos) {
-                        const x = (1 - clubPos.end.x) * width;
-                        const y = clubPos.end.y * height;
-                        if (!started) {
-                            ctx.moveTo(x, y);
-                            started = true;
-                        } else {
-                            ctx.lineTo(x, y);
-                        }
-                    }
-                }
-                ctx.stroke();
-            }
-        }
 
         // Draw skeleton
         if (currentLandmarks && currentLandmarks.length > 0) {
@@ -235,9 +155,9 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
 
             for (const [start, end] of POSE_CONNECTIONS) {
                 if (currentLandmarks[start] && currentLandmarks[end]) {
-                    const x1 = (1 - currentLandmarks[start].x) * width;
+                    const x1 = currentLandmarks[start].x * width;
                     const y1 = currentLandmarks[start].y * height;
-                    const x2 = (1 - currentLandmarks[end].x) * width;
+                    const x2 = currentLandmarks[end].x * width;
                     const y2 = currentLandmarks[end].y * height;
 
                     ctx.beginPath();
@@ -253,14 +173,14 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
                 ctx.strokeStyle = '#EF4444'; // red
                 ctx.lineWidth = 4;
                 ctx.beginPath();
-                ctx.moveTo((1 - clubPos.start.x) * width, clubPos.start.y * height);
-                ctx.lineTo((1 - clubPos.end.x) * width, clubPos.end.y * height);
+                ctx.moveTo(clubPos.start.x * width, clubPos.start.y * height);
+                ctx.lineTo(clubPos.end.x * width, clubPos.end.y * height);
                 ctx.stroke();
 
                 // Club head
                 ctx.fillStyle = '#EF4444';
                 ctx.beginPath();
-                ctx.arc((1 - clubPos.end.x) * width, clubPos.end.y * height, 5, 0, Math.PI * 2);
+                ctx.arc(clubPos.end.x * width, clubPos.end.y * height, 5, 0, Math.PI * 2);
                 ctx.fill();
             }
 
@@ -268,7 +188,7 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
             ctx.fillStyle = '#FBBF24'; // amber
             for (const landmark of currentLandmarks) {
                 if (landmark) {
-                    const x = (1 - landmark.x) * width;
+                    const x = landmark.x * width;
                     const y = landmark.y * height;
                     ctx.beginPath();
                     ctx.arc(x, y, 4, 0, Math.PI * 2);
@@ -285,7 +205,64 @@ export const SkeletonPlayer = forwardRef<HTMLCanvasElement, SkeletonPlayerProps>
         ctx.textAlign = 'left';
         ctx.fillText(`Frame ${currentFrameIndex + 1}/${frames.length}`, 10, 18);
 
-    }, [frames, currentTime, duration, width, height, showTrajectory, getCurrentFrameIndex, getTopOfSwingIndex]);
+        // V-Zone Implementation
+        const drawVZone = () => {
+             // 1. Find Address Frame (Use first valid frame with club data or landmarks)
+            const addressFrame = frames.find(f => f.landmarks.length > 20 && f.club); 
+            if (!addressFrame || !addressFrame.club) return;
+            
+            const landmarks = addressFrame.landmarks;
+            const club = getClubPosition(addressFrame);
+            if (!club) return;
+
+            // 2. Calculate Key Points
+            // Neck: Midpoint of shoulders (11 & 12)
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            const neck = {
+                x: (leftShoulder.x + rightShoulder.x) / 2,
+                y: (leftShoulder.y + rightShoulder.y) / 2
+            };
+
+            // Hands: Midpoint of wrists (15 & 16) - or use existing club start
+            // We use the club start position from getClubPosition which is the hands midpoint
+            const hands = club.start;
+            const clubHead = club.end;
+
+            // 3. Draw V-Zone Lines
+            ctx.strokeStyle = 'rgba(255, 255, 0, 0.5)'; // Yellow, semi-transparent
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 5]); // Dashed line
+
+            // Extrapolation Factor
+            const EXTEND_FACTOR = 4.0;
+
+            // Line 1: Club Head -> Neck (Swing Plane)
+            // Vector Head -> Neck
+            const v1x = neck.x - clubHead.x;
+            const v1y = neck.y - clubHead.y;
+            
+            ctx.beginPath();
+            ctx.moveTo(clubHead.x * width, clubHead.y * height);
+            ctx.lineTo((clubHead.x + v1x * EXTEND_FACTOR) * width, (clubHead.y + v1y * EXTEND_FACTOR) * height);
+            ctx.stroke();
+
+            // Line 2: Club Head -> Hands (Shaft Plane)
+            // Vector Head -> Hands
+            const v2x = hands.x - clubHead.x;
+            const v2y = hands.y - clubHead.y;
+
+            ctx.beginPath();
+            ctx.moveTo(clubHead.x * width, clubHead.y * height);
+            ctx.lineTo((clubHead.x + v2x * EXTEND_FACTOR) * width, (clubHead.y + v2y * EXTEND_FACTOR) * height);
+            ctx.stroke();
+
+            ctx.setLineDash([]); // Reset dash
+        };
+
+        drawVZone();
+
+    }, [frames, currentTime, duration, width, height, getCurrentFrameIndex]);
 
     return (
         <canvas

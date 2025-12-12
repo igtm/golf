@@ -114,10 +114,9 @@ export function detectSwingInterval(frames: PoseFrame[]): { start: number; end: 
     }
 
     const velocities: number[] = [];
-    // Calculate velocities for right wrist (index 16) - usually significant movement
-    // Smooth using moving average
+    // Calculate velocities for right wrist (index 16)
     for (let i = 1; i < frames.length; i++) {
-        const prev = frames[i - 1].landmarks[16]; // Right wrist
+        const prev = frames[i - 1].landmarks[16];
         const curr = frames[i].landmarks[16];
         if (prev && curr) {
             velocities.push(calculateVelocity(prev, curr));
@@ -126,7 +125,7 @@ export function detectSwingInterval(frames: PoseFrame[]): { start: number; end: 
         }
     }
 
-    // Find max velocity (likely impact/downswing)
+    // Find max velocity (Impact)
     let maxVel = 0;
     let maxVelIndex = 0;
     for (let i = 0; i < velocities.length; i++) {
@@ -136,33 +135,33 @@ export function detectSwingInterval(frames: PoseFrame[]): { start: number; end: 
         }
     }
 
-    // Thresholds
-    const ACTIVITY_THRESHOLD = maxVel * 0.15; // 15% of max velocity
+    // Lower threshold for better sensitivity
+    const ACTIVITY_THRESHOLD = maxVel * 0.08;
 
-    // Find start (move backwards from max)
+    // Find start (Address) - Look for stable low velocity
     let startIndex = 0;
     for (let i = maxVelIndex; i >= 0; i--) {
         if (velocities[i] < ACTIVITY_THRESHOLD) {
-            // Check if it stays low for a few frames
+            // Check for stability (3 frames)
             let isStable = true;
-            for (let j = 1; j <= 5 && i - j >= 0; j++) {
+            for (let j = 1; j <= 3 && i - j >= 0; j++) {
                 if (velocities[i - j] > ACTIVITY_THRESHOLD) {
                     isStable = false;
                     break;
                 }
             }
             if (isStable) {
-                startIndex = Math.max(0, i - 10); // Add buffer
+                // Ensure we capture the takeaway trigger
+                startIndex = Math.max(0, i - 15);
                 break;
             }
         }
     }
 
-    // Find end (move forwards from max)
+    // Find end (Finish) - Look for stable low velocity
     let endIndex = frames.length - 1;
     for (let i = maxVelIndex; i < velocities.length; i++) {
         if (velocities[i] < ACTIVITY_THRESHOLD) {
-            // Check if it stays low
             let isStable = true;
             for (let j = 1; j <= 5 && i + j < velocities.length; j++) {
                 if (velocities[i + j] > ACTIVITY_THRESHOLD) {
@@ -171,16 +170,22 @@ export function detectSwingInterval(frames: PoseFrame[]): { start: number; end: 
                 }
             }
             if (isStable) {
-                endIndex = Math.min(frames.length - 1, i + 15); // Add buffer
+                endIndex = Math.min(frames.length - 1, i + 20);
                 break;
             }
         }
     }
 
+    // Safety Force Min Duration: +/- 30 frames around maxVel if detection failed
+    if (endIndex - startIndex < 30) {
+        startIndex = Math.max(0, maxVelIndex - 45); // 1.5s before
+        endIndex = Math.min(frames.length - 1, maxVelIndex + 45); // 1.5s after
+    }
+
     const start = frames[startIndex]?.timestamp || 0;
     const end = frames[endIndex]?.timestamp || frames[frames.length - 1].timestamp;
 
-    console.log(`[DEBUG] Swing Interval: ${startIndex} (${start}ms) -> ${endIndex} (${end}ms)`);
+    console.log(`[DEBUG] Swing Interval: ${startIndex} (${start}ms) -> ${endIndex} (${end}ms), MaxVel Frame: ${maxVelIndex}`);
 
     return { start, end };
 }
@@ -264,4 +269,76 @@ export function analyzeSwing(frames: PoseFrame[]): SwingMetrics | null {
 
     console.log('[DEBUG] Swing analysis complete:', metrics);
     return metrics;
+}
+
+// Visual Helpers
+
+const CLUB_LENGTH = 0.3; // Relative length
+
+export function getClubPosition(frame: PoseFrame): { start: { x: number; y: number }; end: { x: number; y: number } } | null {
+    const landmarks = frame.landmarks;
+    if (landmarks.length < 17) return null;
+
+    const leftWrist = landmarks[15];
+    const rightWrist = landmarks[16];
+    const leftElbow = landmarks[13];
+
+    if (!leftWrist || !rightWrist || !leftElbow) return null;
+
+    // Hands midpoint (start of club)
+    const startX = (leftWrist.x + rightWrist.x) / 2;
+    const startY = (leftWrist.y + rightWrist.y) / 2;
+
+    // Priority: Use debugPoint (exact detection) if available
+    if (frame.club?.debugPoint) {
+        return {
+            start: { x: startX, y: startY },
+            end: {
+                x: frame.club.debugPoint.x,
+                y: frame.club.debugPoint.y
+            }
+        };
+    }
+
+    // Fallback: Use angle + fixed length
+    if (frame.club) {
+        const angleRad = (frame.club.angle * Math.PI) / 180;
+        const dx = Math.cos(angleRad);
+        const dy = Math.sin(angleRad);
+
+        return {
+            start: { x: startX, y: startY },
+            end: {
+                x: startX + dx * CLUB_LENGTH,
+                y: startY + dy * CLUB_LENGTH,
+            }
+        };
+    }
+
+    return null;
+}
+
+export function calculateVZone(frames: PoseFrame[]): { neck: {x: number, y: number}, hands: {x: number, y: number}, clubHead: {x: number, y: number} } | null {
+    // 1. Find Address Frame (Use first valid frame with club data or landmarks)
+    const addressFrame = frames.find(f => f.landmarks.length > 20 && f.club);
+    if (!addressFrame || !addressFrame.club) return null;
+
+    const landmarks = addressFrame.landmarks;
+    const club = getClubPosition(addressFrame);
+    if (!club) return null;
+
+    // 2. Calculate Key Points
+    // Neck: Midpoint of shoulders (11 & 12)
+    const leftShoulder = landmarks[11];
+    const rightShoulder = landmarks[12];
+    const neck = {
+        x: (leftShoulder.x + rightShoulder.x) / 2,
+        y: (leftShoulder.y + rightShoulder.y) / 2
+    };
+
+    return {
+        neck,
+        hands: club.start,
+        clubHead: club.end
+    };
 }

@@ -1,0 +1,14 @@
+[project]
+name = "golf-swing-ml"
+version = "0.1.0"
+description = "Golf Swing Analysis ML Training"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "ultralytics>=8.3.40",
+    "onnx>=1.15.0",
+    "onnxruntime>=1.16.0",
+]
+
+[tool.uv]
+dev-dependencies = []

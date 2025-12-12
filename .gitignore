@@ -29,3 +29,7 @@ dist-ssr
 
 # GitHub App credentials
 gha-creds-*.json
+
+dataset/
+
+.venv
