@@ -19,7 +19,7 @@ const NUM_MASKS = 32;
 const SMOOTHING_FACTOR = 0.3; // Weight for new data (0.3 = moderate smoothing)
 
 let inferenceSession: ort.InferenceSession | null = null;
-let isLoading = false;
+let initializationPromise: Promise<void> | null = null;
 let lastAngle: number | null = null; // Store last valid angle for EMA
 
 // Helper to sigmoid function
@@ -29,36 +29,43 @@ const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
  * Initializes the ONNX Runtime session
  */
 const initSession = async () => {
-    if (inferenceSession || isLoading) return;
+    if (inferenceSession) return;
 
-    // Configure WASM paths
-    ort.env.wasm.wasmPaths = import.meta.env.DEV
-        ? '/node_modules/onnxruntime-web/dist/'
-        : '/';
+    if (!initializationPromise) {
+        initializationPromise = (async () => {
+            // Configure WASM paths
+            ort.env.wasm.wasmPaths = import.meta.env.DEV
+                ? '/node_modules/onnxruntime-web/dist/'
+                : '/';
 
-    // Optimization: Enable Multi-threading & Proxy
-    ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-    ort.env.wasm.proxy = true;
+            // Optimization: Enable Multi-threading & Proxy
+            ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
+            ort.env.wasm.proxy = true;
+
+            try {
+                console.log(`[ClubDetection] Initializing model with threads=${ort.env.wasm.numThreads}`);
+
+                // Try WebGPU first, then WASM
+                const options: ort.InferenceSession.SessionOptions = {
+                    executionProviders: ['webgpu', 'wasm', 'webgl'],
+                    graphOptimizationLevel: 'all'
+                };
+
+                inferenceSession = await ort.InferenceSession.create(MODEL_PATH, options);
+
+                console.log('[ClubDetection] Model loaded successfully');
+            } catch (e) {
+                console.error('[ClubDetection] Failed to load model:', e);
+                throw e;
+            }
+        })();
+    }
 
     try {
-        isLoading = true;
-
-        console.log(`[ClubDetection] Initializing model with threads=${ort.env.wasm.numThreads}`);
-
-        // Try WebGPU first, then WASM
-        const options: ort.InferenceSession.SessionOptions = {
-            executionProviders: ['webgpu', 'wasm', 'webgl'],
-            graphOptimizationLevel: 'all'
-        };
-
-        inferenceSession = await ort.InferenceSession.create(MODEL_PATH, options);
-
-        console.log('[ClubDetection] Model loaded successfully');
+        await initializationPromise;
     } catch (e) {
-        console.error('[ClubDetection] Failed to load model:', e);
+        initializationPromise = null; // Allow retry on next call if it failed
         throw e;
-    } finally {
-        isLoading = false;
     }
 };
 
