@@ -7,7 +7,7 @@ import { SkeletonPlayer } from '../components/SkeletonPlayer';
 import { VZoneOverlay } from '../components/VZoneOverlay';
 
 
-import type { SwingSession, SwingMetrics, PoseFrame, PoseLandmark, ClubData } from '../types/swing';
+import type { SwingSession, SwingMetrics, PoseFrame, PoseLandmark } from '../types/swing';
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { detectClub } from '../utils/clubDetection';
 
@@ -90,7 +90,7 @@ const ReviewPage = () => {
                 // Use contentRect for precise rendered size
                 const { width, height } = entry.contentRect;
                 if (width > 0 && height > 0) {
-                     setVideoDimensions({ width, height });
+                    setVideoDimensions({ width, height });
                 }
             }
         });
@@ -617,7 +617,7 @@ const ReviewPage = () => {
                             {isMuted || volume === 0 ? <VolumeX className="w-5 h-5 text-slate-400" /> : <Volume2 className="w-5 h-5 text-emerald-400" />}
                         </button>
                         <div className="w-0 group-hover:w-20 overflow-hidden transition-all duration-300">
-                             <input
+                            <input
                                 type="range"
                                 min="0"
                                 max="1"
@@ -637,7 +637,7 @@ const ReviewPage = () => {
                         className={`p-2 rounded-lg transition-colors ml-4 ${showVZone ? 'bg-yellow-500/20 text-yellow-500' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
                         title="Toggle V-Zone"
                     >
-                         <Triangle className="w-5 h-5" />
+                        <Triangle className="w-5 h-5" />
                     </button>
 
                     {/* View Mode Buttons */}

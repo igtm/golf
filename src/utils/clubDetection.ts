@@ -6,16 +6,16 @@ import type { ClubData, PoseLandmark } from '../types/swing';
 const MODEL_PATH = '/models/best.onnx';
 const MODEL_INPUT_SIZE = 320;
 const CONFIDENCE_THRESHOLD = 0.2; // Lowered back to 0.2 now that hybrid logic provides stability
-const IOU_THRESHOLD = 0.45;
+
 const MASK_THRESHOLD = 0.2;
 
 // Class Filtering
 // Candidates: 0 (Grip?), 1 (Shaft?), 3 (Head?) -> Need to verify which is which on UI
-const TARGET_CLASS_ID = 1;
+
 
 // Constants for pre-processing
 const NUM_CLASSES = 3; // 0, 1, 3 based on data.yaml
-const NUM_MASKS = 32;  
+const NUM_MASKS = 32;
 const SMOOTHING_FACTOR = 0.3; // Weight for new data (0.3 = moderate smoothing)
 
 let inferenceSession: ort.InferenceSession | null = null;
@@ -30,29 +30,29 @@ const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
  */
 const initSession = async () => {
     if (inferenceSession || isLoading) return;
-    
+
     // Configure WASM paths
-    ort.env.wasm.wasmPaths = import.meta.env.DEV 
-        ? '/node_modules/onnxruntime-web/dist/' 
+    ort.env.wasm.wasmPaths = import.meta.env.DEV
+        ? '/node_modules/onnxruntime-web/dist/'
         : '/';
 
     // Optimization: Enable Multi-threading & Proxy
     ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-    ort.env.wasm.proxy = true; 
+    ort.env.wasm.proxy = true;
 
     try {
         isLoading = true;
-        
+
         console.log(`[ClubDetection] Initializing model with threads=${ort.env.wasm.numThreads}`);
 
         // Try WebGPU first, then WASM
         const options: ort.InferenceSession.SessionOptions = {
-            executionProviders: ['webgpu', 'wasm', 'webgl'], 
+            executionProviders: ['webgpu', 'wasm', 'webgl'],
             graphOptimizationLevel: 'all'
         };
 
         inferenceSession = await ort.InferenceSession.create(MODEL_PATH, options);
-        
+
         console.log('[ClubDetection] Model loaded successfully');
     } catch (e) {
         console.error('[ClubDetection] Failed to load model:', e);
@@ -66,12 +66,12 @@ const initSession = async () => {
  * Preprocess image: Resize to 320x320 and normalize
  * Returns tensor and scale information for restoring coordinates
  */
-const preprocess = (video: HTMLVideoElement | HTMLImageElement |  HTMLCanvasElement): { tensor: ort.Tensor; scale: number; xPadding: number; yPadding: number } => {
+const preprocess = (video: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement): { tensor: ort.Tensor; scale: number; xPadding: number; yPadding: number } => {
     const canvas = document.createElement('canvas');
     canvas.width = MODEL_INPUT_SIZE;
     canvas.height = MODEL_INPUT_SIZE;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    
+
     if (!ctx) throw new Error('Could not get 2D context');
 
     // Letterbox resizing (maintain aspect ratio)
@@ -86,7 +86,7 @@ const preprocess = (video: HTMLVideoElement | HTMLImageElement |  HTMLCanvasElem
     // Fill with gray (114) like YOLO training
     ctx.fillStyle = '#727272';
     ctx.fillRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
-    
+
     // Draw scaled image
     ctx.drawImage(video, xPadding, yPadding, nw, nh);
 
@@ -96,7 +96,7 @@ const preprocess = (video: HTMLVideoElement | HTMLImageElement |  HTMLCanvasElem
 
     // Create tensor (1, 3, 320, 320) - BCHW
     const float32Data = new Float32Array(3 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE);
-    
+
     for (let i = 0; i < MODEL_INPUT_SIZE * MODEL_INPUT_SIZE; i++) {
         // Red
         float32Data[i] = data[i * 4] / 255.0;
@@ -107,7 +107,7 @@ const preprocess = (video: HTMLVideoElement | HTMLImageElement |  HTMLCanvasElem
     }
 
     const tensor = new ort.Tensor('float32', float32Data, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE]);
-    
+
     return { tensor, scale, xPadding, yPadding };
 };
 
@@ -116,7 +116,7 @@ const preprocess = (video: HTMLVideoElement | HTMLImageElement |  HTMLCanvasElem
  */
 export async function detectClub(
     video: HTMLVideoElement,
-    landmarks: PoseLandmark[], 
+    landmarks: PoseLandmark[],
     _width?: number,
     _height?: number
 ): Promise<ClubData | null> {
@@ -131,17 +131,17 @@ export async function detectClub(
 
     try {
         const { tensor, scale, xPadding, yPadding } = preprocess(video);
-        
+
         const feeds = { [inferenceSession.inputNames[0]]: tensor };
         const results = await inferenceSession.run(feeds);
-        
-        const output0 = results[inferenceSession.outputNames[0]]; 
-        const output1 = results[inferenceSession.outputNames[1]]; 
-        
+
+        const output0 = results[inferenceSession.outputNames[0]];
+        const output1 = results[inferenceSession.outputNames[1]];
+
         if (!output0 || !output1) return null;
 
         const data = output0.data as Float32Array;
-        const dims = output0.dims; 
+        const dims = output0.dims;
         const numAnchors = dims[2];
 
         // Store best detection per class
@@ -154,7 +154,7 @@ export async function detectClub(
             // Check specific classes
             // We care about Class 0 (Shaft) and Class 1 (Head)
             // Model outputs: 0, 1, 2 (mapped to 0, 1, 3)
-            const targetIndices = [0, 1]; 
+            const targetIndices = [0, 1];
 
             for (const c of targetIndices) {
                 const val = data[(4 + c) * numAnchors + i];
@@ -194,11 +194,11 @@ export async function detectClub(
             console.log(`[ClubDetection] Found Head (Class 1) with score ${headDetection.score.toFixed(2)}`);
             // Run Mask Logic for Head
             const headResult = processMask(headDetection, output1, scale, xPadding, yPadding, landmarks, video);
-            
+
             // NEW LOGIC: If processMask returns null (because mask was too small), 
             // we do NOT return here. We let it fall through to the Shaft Detection below.
             if (headResult) {
-                 return headResult;
+                return headResult;
             }
             console.log('[ClubDetection] Head found but mask validation failed. Trying fallback to Shaft...');
         }
@@ -224,8 +224,8 @@ function processShaftFallback(
     detection: { score: number; box: number[] },
     video: HTMLVideoElement,
     landmarks: PoseLandmark[],
-    scale: number, 
-    xPadding: number, 
+    scale: number,
+    xPadding: number,
     yPadding: number
 ): ClubData | null {
     if (!landmarks || landmarks.length <= 16) return null;
@@ -278,7 +278,7 @@ function processShaftFallback(
 /**
  * Process the mask for a detection (Used for Head)
  */
- function processMask(
+function processMask(
     detection: { score: number; box: number[]; maskCoeffs: number[] },
     output1: ort.Tensor,
     scale: number,
@@ -290,8 +290,8 @@ function processShaftFallback(
 
     const proto = output1.data as Float32Array;
     const protoDims = output1.dims; // [1, 32, 160, 160]
-    const mh = protoDims[2]; 
-    const mw = protoDims[3]; 
+    const mh = protoDims[2];
+    const mw = protoDims[3];
 
     // Box bounds in input space (640x640)
     const b = detection.box;
@@ -309,7 +309,7 @@ function processShaftFallback(
             // Map 640x640 -> 160x160
             const mx = Math.floor(x * (mw / MODEL_INPUT_SIZE));
             const my = Math.floor(y * (mh / MODEL_INPUT_SIZE));
-            
+
             // Limit checks
             if (mx >= mw || my >= mh) continue;
 
@@ -336,13 +336,13 @@ function processShaftFallback(
     const rightWrist = landmarks[16];
     const videoW = video.videoWidth || video.width;
     const videoH = video.videoHeight || video.height;
-    
+
     // Hands center in video coords
     const hX = ((leftWrist.x + rightWrist.x) / 2) * videoW;
     const hY = ((leftWrist.y + rightWrist.y) / 2) * videoH;
 
     // Vector from Hands to Mask Center
-    const vecAngle = Math.atan2(y2 - y1, x2 - x1); // Initial Placeholder
+
 
     let center: { x: number, y: number };
     let rawAngle = 0;
@@ -351,12 +351,12 @@ function processShaftFallback(
     // If mask is too small, return null so we can fallback to Shaft (Class 0) in the main loop.
     if (maskPixels.length < 3) {
         return null;
-    } 
+    }
 
     const pca = computePCA(maskPixels);
     center = pca.center;
     rawAngle = pca.angle * (180 / Math.PI);
-    
+
     let finalAngle = rawAngle;
 
     // Orientation correction with hands
@@ -369,7 +369,7 @@ function processShaftFallback(
         let diff = Math.abs(finalAngle - vecAngle);
         if (diff > 180) diff = 360 - diff;
         if (diff > 90) finalAngle += 180;
-        
+
         if (finalAngle > 180) finalAngle -= 360;
         if (finalAngle < -180) finalAngle += 360;
     }
@@ -379,16 +379,16 @@ function processShaftFallback(
         let d = finalAngle - lastAngle;
         if (d > 180) d -= 360;
         if (d < -180) d += 360;
-        
+
         finalAngle = lastAngle + d * SMOOTHING_FACTOR;
-        
+
         if (finalAngle > 180) finalAngle -= 360;
         if (finalAngle < -180) finalAngle += 360;
     }
     lastAngle = finalAngle;
 
-    return { 
-        angle: finalAngle, 
+    return {
+        angle: finalAngle,
         score: detection.score,
         debugPoint: {
             x: center.x / videoW,
@@ -397,58 +397,14 @@ function processShaftFallback(
     };
 }
 
-/**
- * Simple NMS implementation
- */
-function nms(boxes: number[][], scores: number[], iouThreshold: number): number[] {
-    const indices = Array.from(Array(scores.length).keys());
-    
-    // Sort by score descending
-    indices.sort((a, b) => scores[b] - scores[a]);
-    
-    const picked: number[] = [];
-    
-    while (indices.length > 0) {
-        const current = indices.shift()!;
-        picked.push(current);
-        
-        const removeIndices: number[] = [];
-        for (let i = 0; i < indices.length; i++) {
-            const index = indices[i];
-            const iou = calculateIoU(boxes[current], boxes[index]);
-            if (iou > iouThreshold) {
-                removeIndices.push(i);
-            }
-        }
-        
-        // Remove suppressed
-        for (let i = removeIndices.length - 1; i >= 0; i--) {
-            indices.splice(removeIndices[i], 1);
-        }
-    }
-    
-    return picked;
-}
 
-function calculateIoU(box1: number[], box2: number[]): number {
-    const x1 = Math.max(box1[0], box2[0]);
-    const y1 = Math.max(box1[1], box2[1]);
-    const x2 = Math.min(box1[2], box2[2]);
-    const y2 = Math.min(box1[3], box2[3]);
-    
-    const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-    const area1 = (box1[2] - box1[0]) * (box1[3] - box1[1]);
-    const area2 = (box2[2] - box2[0]) * (box2[3] - box2[1]);
-    
-    return intersection / (area1 + area2 - intersection);
-}
 
 /**
  * PCA on a set of points to find principal axis angle
  */
-function computePCA(points: { x: number; y: number }[]): { angle: number; center: {x: number, y: number} } {
-    if (points.length === 0) return { angle: 0, center: {x:0, y:0} };
-    
+function computePCA(points: { x: number; y: number }[]): { angle: number; center: { x: number, y: number } } {
+    if (points.length === 0) return { angle: 0, center: { x: 0, y: 0 } };
+
     // 1. Calculate Mean
     let sumX = 0, sumY = 0;
     for (const p of points) {
@@ -457,12 +413,12 @@ function computePCA(points: { x: number; y: number }[]): { angle: number; center
     }
     const meanX = sumX / points.length;
     const meanY = sumY / points.length;
-    
+
     // 2. Covariance Matrix
     // Cov(x,x), Cov(x,y)
     // Cov(y,x), Cov(y,y)
     let xx = 0, xy = 0, yy = 0;
-    
+
     for (const p of points) {
         const dx = p.x - meanX;
         const dy = p.y - meanY;
@@ -470,22 +426,22 @@ function computePCA(points: { x: number; y: number }[]): { angle: number; center
         xy += dx * dy;
         yy += dy * dy;
     }
-    
+
     xx /= points.length;
     xy /= points.length;
     yy /= points.length;
-    
+
     // 3. Eigen decomposition of 2x2 symmetric matrix
     // lambda = ((xx + yy) +/- sqrt((xx-yy)^2 + 4*xy^2)) / 2
     // We want the eigenvector for the larger lambda (primary axis)
-    
+
     // Angle of the primary eigenvector:
     // theta = 0.5 * atan2(2*xy, xx - yy)
     // This gives the angle of the major axis.
-    
+
     const angle = 0.5 * Math.atan2(2 * xy, xx - yy);
-    
-    return { 
+
+    return {
         angle,
         center: { x: meanX, y: meanY }
     };
