@@ -3,7 +3,9 @@ import type { ClubData, PoseLandmark } from '../types/swing';
 
 
 // Model Configuration
-const MODEL_PATH = '/models/best.onnx';
+const wasmBase = import.meta.env.BASE_URL;
+const base = wasmBase.endsWith('/') ? wasmBase : wasmBase + '/';
+const MODEL_PATH = base + 'models/best.onnx';
 const MODEL_INPUT_SIZE = 320;
 const CONFIDENCE_THRESHOLD = 0.2; // Lowered back to 0.2 now that hybrid logic provides stability
 
