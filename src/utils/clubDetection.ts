@@ -21,6 +21,7 @@ const SMOOTHING_FACTOR = 0.3; // Weight for new data (0.3 = moderate smoothing)
 let inferenceSession: ort.InferenceSession | null = null;
 let initializationPromise: Promise<void> | null = null;
 let lastAngle: number | null = null; // Store last valid angle for EMA
+let isInferencing = false; // Prevent concurrent session usage
 
 // Helper to sigmoid function
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
@@ -34,20 +35,33 @@ const initSession = async () => {
     if (!initializationPromise) {
         initializationPromise = (async () => {
             // Configure WASM paths
-            ort.env.wasm.wasmPaths = import.meta.env.DEV
-                ? '/node_modules/onnxruntime-web/dist/'
-                : '/';
+            // in DEV, we must use node_modules path to avoid Vite "import from public" error
+            // in PROD, we use the BASE_URL (e.g. /golf/) serving the files from public/
+            if (import.meta.env.DEV) {
+                ort.env.wasm.wasmPaths = '/node_modules/onnxruntime-web/dist/';
+            } else {
+                const wasmBase = import.meta.env.BASE_URL;
+                ort.env.wasm.wasmPaths = wasmBase.endsWith('/') ? wasmBase : wasmBase + '/';
+            }
 
-            // Optimization: Enable Multi-threading & Proxy
-            ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-            ort.env.wasm.proxy = true;
+            // Optimization: Enable Multi-threading & Proxy ONLY if supported (COOP/COEP headers present)
+            // GitHub Pages default does NOT support SharedArrayBuffer, so we likely fall back to single thread.
+            const canUseThreads = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+
+            if (canUseThreads) {
+                ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
+                ort.env.wasm.proxy = true;
+                console.log(`[ClubDetection] Multi-threading enabled. Threads=${ort.env.wasm.numThreads}`);
+            } else {
+                ort.env.wasm.numThreads = 1;
+                ort.env.wasm.proxy = false;
+                console.log('[ClubDetection] Multi-threading disabled (crossOriginIsolated=false). Using single thread.');
+            }
 
             try {
-                console.log(`[ClubDetection] Initializing model with threads=${ort.env.wasm.numThreads}`);
-
-                // Try WebGPU first, then WASM
+                // Try WASM only for stability given the environment issues
                 const options: ort.InferenceSession.SessionOptions = {
-                    executionProviders: ['webgpu', 'wasm', 'webgl'],
+                    executionProviders: ['wasm'],
                     graphOptimizationLevel: 'all'
                 };
 
@@ -127,16 +141,20 @@ export async function detectClub(
     _width?: number,
     _height?: number
 ): Promise<ClubData | null> {
-    if (!inferenceSession) {
-        console.log('[ClubDetection] v3.2 Checking session...');
-        await initSession();
-    }
-    if (!inferenceSession) {
-        console.error('[ClubDetection] Session failed to initialize');
-        return null;
-    }
+    // 1. Prevent overlapping inference calls (prevents "Session already started")
+    if (isInferencing) return null;
+    isInferencing = true;
 
     try {
+        if (!inferenceSession) {
+            console.log('[ClubDetection] v3.2 Checking session...');
+            await initSession();
+        }
+        if (!inferenceSession) {
+            console.error('[ClubDetection] Session failed to initialize');
+            return null;
+        }
+
         const { tensor, scale, xPadding, yPadding } = preprocess(video);
 
         const feeds = { [inferenceSession.inputNames[0]]: tensor };
@@ -198,7 +216,7 @@ export async function detectClub(
         // Priority 1: Head (Class 1)
         const headDetection = bestDetections.get(1);
         if (headDetection) {
-            console.log(`[ClubDetection] Found Head (Class 1) with score ${headDetection.score.toFixed(2)}`);
+            // console.log(`[ClubDetection] Found Head (Class 1) with score ${headDetection.score.toFixed(2)}`);
             // Run Mask Logic for Head
             const headResult = processMask(headDetection, output1, scale, xPadding, yPadding, landmarks, video);
 
@@ -213,7 +231,7 @@ export async function detectClub(
         // Priority 2: Shaft (Class 0) - Fallback
         const shaftDetection = bestDetections.get(0);
         if (shaftDetection) {
-            console.log(`[ClubDetection] Head missing. Fallback to Shaft (Class 0). Score ${shaftDetection.score.toFixed(2)}`);
+            // console.log(`[ClubDetection] Head missing. Fallback to Shaft (Class 0). Score ${shaftDetection.score.toFixed(2)}`);
             // Geometric Inference: Hands -> Farthest Shaft Corner
             return processShaftFallback(shaftDetection, video, landmarks, scale, xPadding, yPadding);
         }
@@ -223,6 +241,8 @@ export async function detectClub(
     } catch (e) {
         console.error('[ClubDetection] Inference Error:', e);
         return null;
+    } finally {
+        isInferencing = false;
     }
 }
 
